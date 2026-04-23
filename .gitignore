@@ -1,0 +1,21 @@
+# Terraform
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.backup
+*.tfplan
+crash.log
+override.tf
+override.tf.json
+
+# Secrets
+*.pem
+*.key
+serviceAccountKey.json
+.env
+
+# OS
+.DS_Store
+
+# Terragrunt cache
+.terragrunt-cache/
