@@ -19,3 +19,6 @@ serviceAccountKey.json
 
 # Terragrunt cache
 .terragrunt-cache/
+
+# Local docs (generated, not tracked)
+docs/

@@ -10,7 +10,7 @@ PREFIX="swpt-mw1-sandbox"
 
 # Paths to your app files
 INFRA_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-APP_DIR="/mnt/c/Users/tomer/Desktop/PersonalGitProjects/Aladin/aladin-backend"
+APP_DIR="${APP_DIR:-$HOME/Desktop/SoftwareDev/Aladin/aladin-backend}"
 ENV_FILE="$APP_DIR/.env"
 SA_KEY_FILE="$APP_DIR/serviceAccountKey.json"
 
