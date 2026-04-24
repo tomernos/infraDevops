@@ -1,16 +1,10 @@
 #!/bin/bash
-# Sweptlock API — VM startup script
-# Runs once on first boot as root. Logs to /var/log/sweptlock-startup.log
+# Sweptlock VM — first-boot script
+# Installs Docker, writes a systemd service that fetches secrets + runs containers on every boot.
 set -euo pipefail
 exec > /var/log/sweptlock-startup.log 2>&1
 
-echo "=== Sweptlock startup: $(date) ==="
-
-PROJECT="${project_id}"
-REGION="${region}"
-PREFIX="${name_prefix}"
-IMAGE="${image_url}"
-WEB_IMAGE="${web_image_url}"
+echo "=== Sweptlock first-boot: $(date) ==="
 
 # ── Install Docker ────────────────────────────────────────────────────────────
 echo ">>> Installing Docker..."
@@ -31,24 +25,32 @@ apt-get install -y docker-ce docker-ce-cli containerd.io
 systemctl enable --now docker
 echo ">>> Docker installed."
 
-# ── Auth to Artifact Registry ─────────────────────────────────────────────────
-# The VM's attached service account (sa-api) authenticates automatically.
-gcloud auth configure-docker $REGION-docker.pkg.dev --quiet
-echo ">>> Artifact Registry auth configured."
-
-# ── Fetch secrets from Secret Manager ────────────────────────────────────────
 mkdir -p /etc/sweptlock
 chmod 700 /etc/sweptlock
 
+# ── Write sweptlock-start.sh ──────────────────────────────────────────────────
+# Runs on every boot via systemd. Fetches fresh secrets, recreates containers.
+# Uses __PLACEHOLDERS__ replaced by sed below to avoid Terraform template conflicts.
+cat > /usr/local/bin/sweptlock-start.sh << 'STARTSCRIPT'
+#!/bin/bash
+set -euo pipefail
+exec >> /var/log/sweptlock-startup.log 2>&1
+
+PROJECT="__PROJECT__"
+PREFIX="__PREFIX__"
+REGION="__REGION__"
+IMAGE="__IMAGE__"
+WEB_IMAGE="__WEB_IMAGE__"
+
 fetch() {
   gcloud secrets versions access latest \
-    --secret="$PREFIX-$1" \
-    --project="$PROJECT" 2>/dev/null || echo ""
+    --secret="${PREFIX}-$1" \
+    --project="${PROJECT}" 2>/dev/null || echo ""
 }
 
-echo ">>> Fetching secrets..."
+echo "=== sweptlock-start: $(date) ==="
+echo ">>> Fetching secrets from Secret Manager..."
 
-# Write env file — readable by root only
 {
   echo "PORT=4000"
   echo "DB_HOST=$(fetch db-host)"
@@ -63,34 +65,75 @@ echo ">>> Fetching secrets..."
 } > /etc/sweptlock/env
 chmod 600 /etc/sweptlock/env
 
-# Write Firebase service account JSON
-# 644 (not 600) — container runs as non-root and must be able to read this file
-fetch firebase-admin-sdk-json > /etc/sweptlock/serviceAccountKey.json
+gcloud secrets versions access latest \
+  --secret="${PREFIX}-firebase-admin-sdk-json" \
+  --project="${PROJECT}" 2>/dev/null \
+  > /etc/sweptlock/serviceAccountKey.json
 chmod 644 /etc/sweptlock/serviceAccountKey.json
 
 echo ">>> Secrets written."
 
-# ── Pull image and start container ────────────────────────────────────────────
-echo ">>> Pulling image: $IMAGE"
-docker pull "$IMAGE"
+# Pull images only if not already cached (skips on reboot if image exists)
+gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
+docker image inspect "${IMAGE}"     &>/dev/null || docker pull "${IMAGE}"
+docker image inspect "${WEB_IMAGE}" &>/dev/null || docker pull "${WEB_IMAGE}"
 
+# Recreate containers so they pick up the fresh env file
 echo ">>> Starting API container..."
+docker stop sweptlock-api 2>/dev/null || true
+docker rm   sweptlock-api 2>/dev/null || true
 docker run -d \
   --name sweptlock-api \
   --restart unless-stopped \
   --env-file /etc/sweptlock/env \
   -v /etc/sweptlock/serviceAccountKey.json:/app/serviceAccountKey.json:ro \
   -p 4000:4000 \
-  "$IMAGE"
-
-echo ">>> Pulling web image: $WEB_IMAGE"
-docker pull "$WEB_IMAGE"
+  "${IMAGE}"
 
 echo ">>> Starting web container..."
+docker stop sweptlock-web 2>/dev/null || true
+docker rm   sweptlock-web 2>/dev/null || true
 docker run -d \
   --name sweptlock-web \
   --restart unless-stopped \
   -p 80:80 \
-  "$WEB_IMAGE"
+  "${WEB_IMAGE}"
 
-echo "=== Startup complete: $(date) ==="
+echo "=== Done: $(date) ==="
+STARTSCRIPT
+
+# Replace placeholders with real values (Terraform variables substituted here)
+sed -i "s|__PROJECT__|${project_id}|g"   /usr/local/bin/sweptlock-start.sh
+sed -i "s|__PREFIX__|${name_prefix}|g"   /usr/local/bin/sweptlock-start.sh
+sed -i "s|__REGION__|${region}|g"        /usr/local/bin/sweptlock-start.sh
+sed -i "s|__IMAGE__|${image_url}|g"      /usr/local/bin/sweptlock-start.sh
+sed -i "s|__WEB_IMAGE__|${web_image_url}|g" /usr/local/bin/sweptlock-start.sh
+chmod +x /usr/local/bin/sweptlock-start.sh
+
+# ── Write systemd service ─────────────────────────────────────────────────────
+# Runs sweptlock-start.sh on every boot, after Docker is ready.
+cat > /etc/systemd/system/sweptlock.service << 'SYSTEMD'
+[Unit]
+Description=Sweptlock — refresh secrets and run containers
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/sweptlock-start.sh
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target
+SYSTEMD
+
+systemctl daemon-reload
+systemctl enable sweptlock.service
+
+# Run immediately for first boot
+echo ">>> Running sweptlock-start for first boot..."
+/usr/local/bin/sweptlock-start.sh
+
+echo "=== First-boot complete: $(date) ==="
