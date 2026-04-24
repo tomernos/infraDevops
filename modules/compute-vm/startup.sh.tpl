@@ -10,6 +10,7 @@ PROJECT="${project_id}"
 REGION="${region}"
 PREFIX="${name_prefix}"
 IMAGE="${image_url}"
+WEB_IMAGE="${web_image_url}"
 
 # ── Install Docker ────────────────────────────────────────────────────────────
 echo ">>> Installing Docker..."
@@ -73,7 +74,7 @@ echo ">>> Secrets written."
 echo ">>> Pulling image: $IMAGE"
 docker pull "$IMAGE"
 
-echo ">>> Starting container..."
+echo ">>> Starting API container..."
 docker run -d \
   --name sweptlock-api \
   --restart unless-stopped \
@@ -81,5 +82,15 @@ docker run -d \
   -v /etc/sweptlock/serviceAccountKey.json:/app/serviceAccountKey.json:ro \
   -p 4000:4000 \
   "$IMAGE"
+
+echo ">>> Pulling web image: $WEB_IMAGE"
+docker pull "$WEB_IMAGE"
+
+echo ">>> Starting web container..."
+docker run -d \
+  --name sweptlock-web \
+  --restart unless-stopped \
+  -p 80:80 \
+  "$WEB_IMAGE"
 
 echo "=== Startup complete: $(date) ==="

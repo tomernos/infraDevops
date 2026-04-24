@@ -17,7 +17,7 @@ resource "google_compute_firewall" "allow_api_direct" {
 
   allow {
     protocol = "tcp"
-    ports    = ["4000"]
+    ports    = ["80", "4000"]
   }
 
   source_ranges = ["0.0.0.0/0"]
@@ -59,10 +59,11 @@ resource "google_compute_instance" "api" {
 
   metadata = {
     startup-script = templatefile("${path.module}/startup.sh.tpl", {
-      project_id = var.project_id
-      region     = var.region
-      name_prefix = var.name_prefix
-      image_url  = var.image_url
+      project_id    = var.project_id
+      region        = var.region
+      name_prefix   = var.name_prefix
+      image_url     = var.image_url
+      web_image_url = var.web_image_url
     })
   }
 

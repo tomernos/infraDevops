@@ -12,5 +12,10 @@ variable "machine_type" {
 
 variable "image_url" {
   type        = string
-  description = "Full Artifact Registry image URL including tag"
+  description = "Full Artifact Registry image URL for the backend API"
+}
+
+variable "web_image_url" {
+  type        = string
+  description = "Full Artifact Registry image URL for the frontend web app"
 }

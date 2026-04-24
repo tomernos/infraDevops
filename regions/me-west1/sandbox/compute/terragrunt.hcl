@@ -39,4 +39,5 @@ inputs = {
   vpc_name         = "swpt-mw1-sandbox-vpc"
   sa_api_email     = dependency.security.outputs.sa_api_email
   image_url        = "${dependency.registry.outputs.image_base_url}/api:latest"
+  web_image_url    = "${dependency.registry.outputs.image_base_url}/web:latest"
 }
