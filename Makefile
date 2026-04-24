@@ -26,8 +26,8 @@ help:
 	@echo "    make setup-cicd-sa      Create GitHub CI service account"
 	@echo ""
 	@echo "  Terraform"
-	@echo "    make init               terragrunt run-all init"
-	@echo "    make plan               terragrunt run-all plan"
+	@echo "    make init               terragrunt run --all init"
+	@echo "    make plan               terragrunt run --all plan"
 	@echo "    make apply              Apply all stacks (ordered by deps)"
 	@echo "    make destroy            Destroy all stacks"
 	@echo "    make apply-<module>     Apply single stack (networking|security|registry|database|compute)"
@@ -57,16 +57,16 @@ setup-cicd-sa:
 
 # ── Terraform: all stacks ────────────────────────────────────────────────────
 init:
-	cd $(STACK_ROOT) && terragrunt run-all init
+	cd $(STACK_ROOT) && terragrunt run --all init --non-interactive
 
 plan:
-	cd $(STACK_ROOT) && terragrunt run-all plan
+	cd $(STACK_ROOT) && terragrunt run --all plan --non-interactive
 
 apply:
-	cd $(STACK_ROOT) && terragrunt run-all apply
+	cd $(STACK_ROOT) && terragrunt run --all apply --non-interactive
 
 destroy:
-	cd $(STACK_ROOT) && terragrunt run-all destroy
+	cd $(STACK_ROOT) && terragrunt run --all destroy --non-interactive
 
 # ── Terraform: individual stacks ─────────────────────────────────────────────
 apply-networking:
@@ -85,7 +85,7 @@ apply-compute:
 	cd $(STACK_ROOT)/compute && terragrunt apply -auto-approve
 
 # ── Docker ───────────────────────────────────────────────────────────────────
-ALADIN_BACKEND ?= $(HOME)/Desktop/SoftwareDev/Aladin/aladin-backend
+ALADIN_BACKEND ?= $(HOME)/Desktop/PersonalGitProjects/Aladin/aladin-backend
 
 build:
 	gcloud auth configure-docker $(REGION)-docker.pkg.dev --quiet
