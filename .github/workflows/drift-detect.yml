@@ -1,0 +1,215 @@
+name: Drift Detection
+
+on:
+  schedule:
+    - cron: '0 5 * * *'   # 05:00 UTC daily — 8am Israel time
+  workflow_dispatch:       # manual trigger for on-demand checks
+
+jobs:
+  drift:
+    name: Detect sandbox drift
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      issues: write        # open / close drift issues
+
+    env:
+      PROJECT_ID: cryptoshare-e5172
+      TF_VERSION: "1.9.8"
+      TG_VERSION: "0.67.16"
+      DRIFT_LABEL: "infrastructure-drift"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Install Terragrunt
+        run: |
+          curl -sL "https://github.com/gruntwork-io/terragrunt/releases/download/v${{ env.TG_VERSION }}/terragrunt_linux_amd64" \
+            -o /usr/local/bin/terragrunt
+          chmod +x /usr/local/bin/terragrunt
+
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.SA_CI_TF_PLAN_EMAIL }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      # Plan exits 0 = no changes, 2 = changes detected, 1 = error
+      - name: Run plan
+        id: plan
+        working-directory: regions/me-west1/sandbox
+        run: |
+          set +e
+          terragrunt run-all plan \
+            --terragrunt-non-interactive \
+            -detailed-exitcode \
+            -no-color 2>&1 | tee /tmp/plan.txt
+          echo "exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+          set -e
+
+      - name: Parse drift summary
+        id: summary
+        run: |
+          PLAN=$(cat /tmp/plan.txt)
+
+          # Extract resource change counts from plan output
+          ADDS=$(echo "$PLAN"    | grep -oP '\d+(?= to add)'    | paste -sd+ | bc 2>/dev/null || echo 0)
+          CHANGES=$(echo "$PLAN" | grep -oP '\d+(?= to change)' | paste -sd+ | bc 2>/dev/null || echo 0)
+          DESTROYS=$(echo "$PLAN"| grep -oP '\d+(?= to destroy)'| paste -sd+ | bc 2>/dev/null || echo 0)
+
+          echo "adds=$ADDS"       >> "$GITHUB_OUTPUT"
+          echo "changes=$CHANGES" >> "$GITHUB_OUTPUT"
+          echo "destroys=$DESTROYS" >> "$GITHUB_OUTPUT"
+
+          # Truncate plan for issue body (GitHub limit)
+          TRUNCATED=$(echo "$PLAN" | tail -c 60000)
+          echo "plan_body<<EOF" >> "$GITHUB_OUTPUT"
+          echo "$TRUNCATED"     >> "$GITHUB_OUTPUT"
+          echo "EOF"            >> "$GITHUB_OUTPUT"
+
+      # ── Drift detected — open or update issue ────────────────────────────────
+      - name: Open or update drift issue
+        if: steps.plan.outputs.exit_code == '2'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const adds     = '${{ steps.summary.outputs.adds }}';
+            const changes  = '${{ steps.summary.outputs.changes }}';
+            const destroys = '${{ steps.summary.outputs.destroys }}';
+            const plan     = `${{ steps.summary.outputs.plan_body }}`;
+            const label    = '${{ env.DRIFT_LABEL }}';
+            const runUrl   = `${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}`;
+
+            const title = `🚨 Infrastructure Drift — sandbox (+${adds} ~${changes} -${destroys})`;
+            const body = [
+              `## Infrastructure Drift Detected`,
+              ``,
+              `Sandbox infrastructure has drifted from the Terraform state.`,
+              ``,
+              `| Metric | Count |`,
+              `|---|---|`,
+              `| Resources to add | \`${adds}\` |`,
+              `| Resources to change | \`${changes}\` |`,
+              `| Resources to destroy | \`${destroys}\` |`,
+              `| Detected | ${new Date().toISOString()} |`,
+              `| Workflow run | [View logs](${runUrl}) |`,
+              ``,
+              `## Plan output`,
+              `\`\`\`hcl`,
+              plan,
+              `\`\`\``,
+              ``,
+              `## Resolution`,
+              `Run \`terragrunt run-all apply\` in \`regions/me-west1/sandbox\` or open a PR to fix the drift.`,
+            ].join('\n');
+
+            // Ensure the label exists
+            try {
+              await github.rest.issues.createLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name: label,
+                color: 'e11d48',
+                description: 'Infrastructure has drifted from Terraform state',
+              });
+            } catch (_) {}
+
+            // Find existing open drift issue
+            const existing = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              labels: label,
+              state: 'open',
+            });
+
+            if (existing.data.length > 0) {
+              // Update the existing issue title + add a comment
+              const issue = existing.data[0];
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                title,
+              });
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                body: `### Drift still detected — ${new Date().toISOString()}\n\n+${adds} ~${changes} -${destroys}\n\n[Run logs](${runUrl})`,
+              });
+              console.log(`Updated existing drift issue #${issue.number}`);
+            } else {
+              const created = await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title,
+                body,
+                labels: [label],
+              });
+              console.log(`Opened drift issue #${created.data.number}`);
+            }
+
+      # ── No drift — close any open drift issue ────────────────────────────────
+      - name: Close drift issue if resolved
+        if: steps.plan.outputs.exit_code == '0'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const label = '${{ env.DRIFT_LABEL }}';
+            const existing = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              labels: label,
+              state: 'open',
+            });
+
+            for (const issue of existing.data) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                body: `✅ Drift resolved — sandbox is back in sync with Terraform state.\n\nAuto-closed by drift detection run on ${new Date().toISOString()}.`,
+              });
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                state: 'closed',
+              });
+              console.log(`Closed drift issue #${issue.number}`);
+            }
+
+      - name: Drift summary
+        if: always()
+        run: |
+          EXIT="${{ steps.plan.outputs.exit_code }}"
+          ADDS="${{ steps.summary.outputs.adds }}"
+          CHANGES="${{ steps.summary.outputs.changes }}"
+          DESTROYS="${{ steps.summary.outputs.destroys }}"
+          {
+            echo "## 🔍 Drift Detection — Sandbox"
+            echo "| | |"
+            echo "|---|---|"
+            if [ "$EXIT" = "0" ]; then
+              echo "| **Result** | ✅ No drift |"
+            elif [ "$EXIT" = "2" ]; then
+              echo "| **Result** | 🚨 Drift detected |"
+              echo "| **To add** | \`$ADDS\` |"
+              echo "| **To change** | \`$CHANGES\` |"
+              echo "| **To destroy** | \`$DESTROYS\` |"
+            else
+              echo "| **Result** | ❌ Plan error |"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

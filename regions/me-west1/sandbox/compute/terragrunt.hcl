@@ -13,7 +13,7 @@ dependency "networking" {
     subnet_self_link = "projects/mock/regions/me-west1/subnetworks/mock-subnet"
     vpc_id        = "projects/mock/global/networks/mock-vpc"
   }
-  mock_outputs_allowed_terraform_commands = ["init", "validate", "plan"]
+  mock_outputs_allowed_terraform_commands = ["init", "validate", "plan", "destroy"]
 }
 
 dependency "security" {
@@ -21,7 +21,7 @@ dependency "security" {
   mock_outputs = {
     sa_api_email = "mock-sa@mock-project.iam.gserviceaccount.com"
   }
-  mock_outputs_allowed_terraform_commands = ["init", "validate", "plan"]
+  mock_outputs_allowed_terraform_commands = ["init", "validate", "plan", "destroy"]
 }
 
 dependency "registry" {
@@ -29,7 +29,7 @@ dependency "registry" {
   mock_outputs = {
     image_base_url = "me-west1-docker.pkg.dev/mock-project/mock-registry"
   }
-  mock_outputs_allowed_terraform_commands = ["init", "validate", "plan"]
+  mock_outputs_allowed_terraform_commands = ["init", "validate", "plan", "destroy"]
 }
 
 inputs = {

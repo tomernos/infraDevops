@@ -82,7 +82,7 @@ resource "google_compute_firewall" "allow_lb" {
 
   allow {
     protocol = "tcp"
-    ports    = ["4000", "80", "443"]
+    ports    = ["80", "443"]
   }
 
   # GCP LB health check source ranges

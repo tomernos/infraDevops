@@ -1,0 +1,211 @@
+name: Terraform Plan
+
+on:
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: tf-plan-${{ github.head_ref }}
+  cancel-in-progress: true
+
+jobs:
+  plan:
+    name: Plan — sandbox
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: write
+
+    env:
+      PROJECT_ID: cryptoshare-e5172
+      TF_VERSION: "1.9.8"
+      TG_VERSION: "0.67.16"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Install Terragrunt
+        run: |
+          curl -sL "https://github.com/gruntwork-io/terragrunt/releases/download/v${{ env.TG_VERSION }}/terragrunt_linux_amd64" \
+            -o /usr/local/bin/terragrunt
+          chmod +x /usr/local/bin/terragrunt
+
+      - name: Install tflint
+        run: |
+          curl -sL https://raw.githubusercontent.com/terraform-linters/tflint/master/install_linux.sh | bash
+          tflint --init
+
+      - name: Install tfsec
+        run: |
+          curl -sL "https://github.com/aquasecurity/tfsec/releases/latest/download/tfsec-linux-amd64" \
+            -o /usr/local/bin/tfsec
+          chmod +x /usr/local/bin/tfsec
+
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.SA_CI_TF_PLAN_EMAIL }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      # ── Static checks ────────────────────────────────────────────────────────
+      - name: terraform fmt
+        id: fmt
+        run: |
+          terraform fmt -check -recursive modules/ 2>&1 | tee /tmp/fmt.txt
+          echo "exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+        continue-on-error: true
+
+      - name: tflint
+        id: tflint
+        run: |
+          for dir in modules/*/; do
+            tflint --chdir="$dir" --disable-rule=terraform_required_version 2>&1
+          done | tee /tmp/tflint.txt
+          echo "exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+        continue-on-error: true
+
+      - name: tfsec
+        id: tfsec
+        run: |
+          tfsec modules/ --soft-fail --minimum-severity MEDIUM --no-colour 2>&1 | tee /tmp/tfsec.txt
+          echo "exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+        continue-on-error: true
+
+      # ── Plan ─────────────────────────────────────────────────────────────────
+      - name: terragrunt plan
+        id: plan
+        working-directory: regions/me-west1/sandbox
+        run: |
+          set +e
+          terragrunt run-all plan \
+            --terragrunt-non-interactive \
+            --terragrunt-include-external-dependencies \
+            -no-color 2>&1 | tee /tmp/plan.txt
+          echo "exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+          set -e
+
+      - name: Parse plan stats
+        id: stats
+        run: |
+          PLAN=$(cat /tmp/plan.txt)
+          ADDS=$(echo "$PLAN"    | grep -oP '\d+(?= to add)'    | paste -sd+ | bc 2>/dev/null || echo 0)
+          CHANGES=$(echo "$PLAN" | grep -oP '\d+(?= to change)' | paste -sd+ | bc 2>/dev/null || echo 0)
+          DESTROYS=$(echo "$PLAN"| grep -oP '\d+(?= to destroy)'| paste -sd+ | bc 2>/dev/null || echo 0)
+          echo "adds=$ADDS"         >> "$GITHUB_OUTPUT"
+          echo "changes=$CHANGES"   >> "$GITHUB_OUTPUT"
+          echo "destroys=$DESTROYS" >> "$GITHUB_OUTPUT"
+
+          # Truncate for PR comment
+          TRUNCATED=$(echo "$PLAN" | tail -c 55000)
+          {
+            echo "plan_body<<PLANEOF"
+            echo "$TRUNCATED"
+            echo "PLANEOF"
+          } >> "$GITHUB_OUTPUT"
+
+      # ── Post PR comment ───────────────────────────────────────────────────────
+      - name: Post plan comment
+        uses: actions/github-script@v7
+        if: always()
+        with:
+          script: |
+            const planExitCode  = '${{ steps.plan.outputs.exit_code }}';
+            const fmtExitCode   = '${{ steps.fmt.outputs.exit_code }}';
+            const tflintExitCode= '${{ steps.tflint.outputs.exit_code }}';
+            const tfsecExitCode = '${{ steps.tfsec.outputs.exit_code }}';
+
+            const adds     = '${{ steps.stats.outputs.adds }}' || '0';
+            const changes  = '${{ steps.stats.outputs.changes }}' || '0';
+            const destroys = '${{ steps.stats.outputs.destroys }}' || '0';
+            const plan     = `${{ steps.stats.outputs.plan_body }}`;
+
+            const planIcon = planExitCode === '0' ? '✅' : '❌';
+            const fmtIcon  = fmtExitCode  === '0' ? '✅' : '⚠️';
+            const lintIcon = tflintExitCode=== '0' ? '✅' : '⚠️';
+            const secIcon  = tfsecExitCode === '0' ? '✅' : '⚠️';
+
+            const hasDestroys = parseInt(destroys) > 0;
+
+            const body = [
+              `## ${planIcon} Terraform Plan — sandbox`,
+              ``,
+              `| Check | Status |`,
+              `|---|---|`,
+              `| 🗂️ Plan | ${planIcon} exit \`${planExitCode}\` |`,
+              `| 📐 Format | ${fmtIcon} |`,
+              `| 🔍 tflint | ${lintIcon} |`,
+              `| 🔒 tfsec | ${secIcon} |`,
+              ``,
+              `### Resource changes`,
+              `| | Count |`,
+              `|---|---|`,
+              `| ➕ Add | **${adds}** |`,
+              `| 🔄 Change | **${changes}** |`,
+              `| ${hasDestroys ? '⛔' : '➖'} Destroy | **${destroys}** |`,
+              hasDestroys ? `\n> ⚠️ **This plan destroys ${destroys} resource(s). Review carefully.**` : '',
+              ``,
+              `<details><summary>📋 Full plan output</summary>`,
+              ``,
+              `\`\`\`hcl`,
+              plan,
+              `\`\`\``,
+              `</details>`,
+              ``,
+              `---`,
+              `*Triggered by @${{ github.actor }} • [${{ github.sha }}](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }})*`,
+            ].join('\n');
+
+            // Delete previous plan comment from this bot, then post fresh
+            const comments = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            for (const c of comments.data) {
+              if (c.user.type === 'Bot' && c.body.includes('Terraform Plan — sandbox')) {
+                await github.rest.issues.deleteComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: c.id,
+                });
+              }
+            }
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
+
+      - name: Fail if plan errored
+        if: steps.plan.outputs.exit_code != '0' && steps.plan.outputs.exit_code != '2'
+        run: |
+          echo "::error::Terraform plan returned exit code ${{ steps.plan.outputs.exit_code }} (error)"
+          exit 1
+
+      - name: Plan summary
+        if: always()
+        run: |
+          {
+            echo "## Terraform Plan"
+            echo "| Check | |"
+            echo "|---|---|"
+            echo "| Plan | ${{ steps.plan.outputs.exit_code == '0' && '✅ No changes' || steps.plan.outputs.exit_code == '2' && '📋 Changes pending' || '❌ Error' }} |"
+            echo "| Format | ${{ steps.fmt.outputs.exit_code == '0' && '✅' || '⚠️ Issues found' }} |"
+            echo "| tflint | ${{ steps.tflint.outputs.exit_code == '0' && '✅' || '⚠️ Issues found' }} |"
+            echo "| tfsec | ${{ steps.tfsec.outputs.exit_code == '0' && '✅' || '⚠️ Issues found' }} |"
+            echo "| +/~/- | +${{ steps.stats.outputs.adds }} ~${{ steps.stats.outputs.changes }} -${{ steps.stats.outputs.destroys }} |"
+          } >> "$GITHUB_STEP_SUMMARY"

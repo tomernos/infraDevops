@@ -1,0 +1,64 @@
+name: Terraform Apply — Sandbox
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  apply:
+    name: Apply sandbox
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write   # WIF
+
+    env:
+      PROJECT_ID: cryptoshare-e5172
+      TF_VERSION: "1.9.8"
+      TG_VERSION: "0.67.16"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── Tools ─────────────────────────────────────────────────────────────────
+      - name: Install Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Install Terragrunt
+        run: |
+          curl -sL "https://github.com/gruntwork-io/terragrunt/releases/download/v${{ env.TG_VERSION }}/terragrunt_linux_amd64" \
+            -o /usr/local/bin/terragrunt
+          chmod +x /usr/local/bin/terragrunt
+
+      # ── Auth — WIF, apply SA ───────────────────────────────────────────────────
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.SA_CI_TF_APPLY_EMAIL }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      # ── Apply ─────────────────────────────────────────────────────────────────
+      - name: terragrunt apply
+        working-directory: regions/me-west1/sandbox
+        run: |
+          terragrunt run-all apply \
+            --terragrunt-non-interactive \
+            -auto-approve
+
+      - name: Apply summary
+        if: success()
+        run: |
+          {
+            echo "### Infrastructure Applied — sandbox"
+            echo "Commit: \`${{ github.sha }}\`"
+            echo "Applied by: \`${{ github.actor }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

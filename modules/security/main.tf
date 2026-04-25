@@ -40,11 +40,30 @@ resource "google_project_iam_member" "migrator_sql_client" {
 }
 
 # ── KMS ───────────────────────────────────────────────────────────────────────
+#
+# GCP KMS KeyRings cannot be truly deleted — GCP soft-deletes them and reserves
+# the name for 30 days. Any apply within that window will 409 without an import.
+#
+# These import blocks are idempotent:
+#   - Resource already in state  → no-op (normal path)
+#   - Resource in GCP, not state → imports it automatically (destroy/re-apply path)
+#   - Brand-new environment      → comment both import blocks out for the first
+#                                  apply only; uncomment after.
+
+import {
+  id = "projects/${var.project_id}/locations/${var.region}/keyRings/${var.name_prefix}-kms-kr"
+  to = google_kms_key_ring.main
+}
 
 resource "google_kms_key_ring" "main" {
   name     = "${var.name_prefix}-kms-kr"
   location = var.region
   project  = var.project_id
+}
+
+import {
+  id = "projects/${var.project_id}/locations/${var.region}/keyRings/${var.name_prefix}-kms-kr/cryptoKeys/${var.name_prefix}-kms-trust-dek"
+  to = google_kms_crypto_key.trust_dek
 }
 
 resource "google_kms_crypto_key" "trust_dek" {

@@ -16,7 +16,7 @@ dependency "networking" {
     vpc_self_link                    = "projects/mock/global/networks/mock-vpc"
     private_service_connection_id    = "mock-connection-id"
   }
-  mock_outputs_allowed_terraform_commands = ["init", "validate", "plan"]
+  mock_outputs_allowed_terraform_commands = ["init", "validate", "plan", "destroy"]
 }
 
 inputs = {

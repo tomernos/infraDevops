@@ -17,7 +17,7 @@ resource "google_compute_firewall" "allow_api_direct" {
 
   allow {
     protocol = "tcp"
-    ports    = ["80", "4000"]
+    ports    = ["80"]
   }
 
   source_ranges = ["0.0.0.0/0"]
@@ -58,6 +58,7 @@ resource "google_compute_instance" "api" {
   }
 
   metadata = {
+    enable-oslogin = "TRUE"
     startup-script = templatefile("${path.module}/startup.sh.tpl", {
       project_id    = var.project_id
       region        = var.region

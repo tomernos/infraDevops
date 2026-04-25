@@ -13,7 +13,7 @@ apt-get install -y ca-certificates curl gnupg lsb-release
 
 install -m 0755 -d /etc/apt/keyrings
 curl -fsSL https://download.docker.com/linux/debian/gpg \
-  | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+  | gpg --batch --dearmor -o /etc/apt/keyrings/docker.gpg
 chmod a+r /etc/apt/keyrings/docker.gpg
 
 echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] \
@@ -44,8 +44,8 @@ WEB_IMAGE="__WEB_IMAGE__"
 
 fetch() {
   gcloud secrets versions access latest \
-    --secret="${PREFIX}-$1" \
-    --project="${PROJECT}" 2>/dev/null || echo ""
+    --secret="$${PREFIX}-$1" \
+    --project="$${PROJECT}" 2>/dev/null || echo ""
 }
 
 echo "=== sweptlock-start: $(date) ==="
@@ -66,17 +66,20 @@ echo ">>> Fetching secrets from Secret Manager..."
 chmod 600 /etc/sweptlock/env
 
 gcloud secrets versions access latest \
-  --secret="${PREFIX}-firebase-admin-sdk-json" \
-  --project="${PROJECT}" 2>/dev/null \
-  > /etc/sweptlock/serviceAccountKey.json
+  --secret="$${PREFIX}-firebase-admin-sdk-json" \
+  --project="$${PROJECT}" 2>/dev/null \
+  > /etc/sweptlock/serviceAccountKey.json || true
 chmod 644 /etc/sweptlock/serviceAccountKey.json
 
 echo ">>> Secrets written."
 
 # Pull images only if not already cached (skips on reboot if image exists)
-gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
-docker image inspect "${IMAGE}"     &>/dev/null || docker pull "${IMAGE}"
-docker image inspect "${WEB_IMAGE}" &>/dev/null || docker pull "${WEB_IMAGE}"
+gcloud auth configure-docker "$${REGION}-docker.pkg.dev" --quiet
+docker image inspect "$${IMAGE}"     &>/dev/null || docker pull "$${IMAGE}"
+docker image inspect "$${WEB_IMAGE}" &>/dev/null || docker pull "$${WEB_IMAGE}"
+
+# Shared network so nginx can proxy to sweptlock-api by container name
+docker network create sweptlock 2>/dev/null || true
 
 # Recreate containers so they pick up the fresh env file
 echo ">>> Starting API container..."
@@ -84,20 +87,21 @@ docker stop sweptlock-api 2>/dev/null || true
 docker rm   sweptlock-api 2>/dev/null || true
 docker run -d \
   --name sweptlock-api \
+  --network sweptlock \
   --restart unless-stopped \
   --env-file /etc/sweptlock/env \
   -v /etc/sweptlock/serviceAccountKey.json:/app/serviceAccountKey.json:ro \
-  -p 4000:4000 \
-  "${IMAGE}"
+  "$${IMAGE}"
 
 echo ">>> Starting web container..."
 docker stop sweptlock-web 2>/dev/null || true
 docker rm   sweptlock-web 2>/dev/null || true
 docker run -d \
   --name sweptlock-web \
+  --network sweptlock \
   --restart unless-stopped \
   -p 80:80 \
-  "${WEB_IMAGE}"
+  "$${WEB_IMAGE}"
 
 echo "=== Done: $(date) ==="
 STARTSCRIPT

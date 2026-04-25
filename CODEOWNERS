@@ -1,0 +1,11 @@
+# All infra changes require Tomer's review
+* @tomernos
+
+# Production env — double-check everything
+regions/me-west1/prod/ @tomernos
+
+# Shared modules — changes affect all envs
+modules/ @tomernos
+
+# CI/CD pipelines
+.github/workflows/ @tomernos

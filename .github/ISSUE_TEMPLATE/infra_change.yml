@@ -1,0 +1,61 @@
+name: Infrastructure Change
+description: Request a planned infrastructure change
+labels: ["infrastructure"]
+body:
+  - type: markdown
+    attributes:
+      value: "## Infrastructure Change Request"
+
+  - type: dropdown
+    id: stack
+    attributes:
+      label: Stack
+      multiple: true
+      options:
+        - networking
+        - security
+        - database
+        - compute
+        - registry
+        - workload-identity
+        - dns
+        - observability
+        - modules (shared)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: env
+    attributes:
+      label: Environment
+      options:
+        - sandbox only
+        - sandbox → dev
+        - sandbox → dev → prod
+    validations:
+      required: true
+
+  - type: textarea
+    id: change
+    attributes:
+      label: What needs to change?
+    validations:
+      required: true
+
+  - type: textarea
+    id: why
+    attributes:
+      label: Why?
+    validations:
+      required: true
+
+  - type: dropdown
+    id: risk
+    attributes:
+      label: Risk level
+      options:
+        - Low — additive change, no existing resources affected
+        - Medium — modifies existing resources
+        - High — destroys resources or affects prod
+    validations:
+      required: true

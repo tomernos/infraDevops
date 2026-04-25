@@ -1,0 +1,32 @@
+name: Infrastructure Drift
+description: Manually report infrastructure drift (auto-created by drift-detect workflow)
+labels: ["infrastructure-drift"]
+body:
+  - type: markdown
+    attributes:
+      value: "## Infrastructure Drift\n\n> ℹ️ This issue is usually auto-created by the nightly drift detection workflow. Fill manually only if reporting a known drift."
+
+  - type: dropdown
+    id: env
+    attributes:
+      label: Environment
+      options:
+        - sandbox
+        - dev
+        - prod
+    validations:
+      required: true
+
+  - type: textarea
+    id: resources
+    attributes:
+      label: Drifted resources
+      placeholder: Which resources are out of sync?
+    validations:
+      required: true
+
+  - type: textarea
+    id: plan
+    attributes:
+      label: Terraform plan output
+      render: hcl
