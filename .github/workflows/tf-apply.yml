@@ -1,6 +1,6 @@
 name: "Terraform Apply"
 # Manual only — select environment and region from the GitHub Actions UI.
-# Plans first, then applies if no failures. Uses GitHub Environments for optional approval.
+# Plans first, then applies (or dry-run = plan only, no apply).
 
 on:
   workflow_dispatch:
@@ -22,6 +22,10 @@ on:
 
 jobs:
   core:
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: write
     uses: ./.github/workflows/_tf-core.yml
     with:
       environment: ${{ inputs.environment }}

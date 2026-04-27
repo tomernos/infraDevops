@@ -1,34 +1,29 @@
 name: "Terraform Plan"
-# Runs on PRs to main and on manual dispatch.
-# Posts per-module plan results as a PR comment.
+# Runs automatically on PRs to main when infra files change.
+# For manual runs: use "Terraform Apply" with dry_run checked.
 
 on:
   pull_request:
     branches: [main]
-    paths: ["**.tf", "**.hcl", ".github/workflows/tf-plan.yml", ".github/workflows/_tf-core.yml"]
-
-  workflow_dispatch:
-    inputs:
-      environment:
-        description: "Environment to plan"
-        type: choice
-        options: [sandbox]
-        default: sandbox
-      region:
-        description: "GCP region"
-        type: choice
-        options: [me-west1]
-        default: me-west1
+    paths:
+      - "**.tf"
+      - "**.hcl"
+      - ".github/workflows/tf-plan.yml"
+      - ".github/workflows/_tf-core.yml"
 
 concurrency:
-  group: tf-plan-${{ github.head_ref || github.run_id }}
+  group: tf-plan-${{ github.head_ref }}
   cancel-in-progress: true
 
 jobs:
   core:
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: write
     uses: ./.github/workflows/_tf-core.yml
     with:
-      environment: ${{ inputs.environment || 'sandbox' }}
-      region:      ${{ inputs.region      || 'me-west1' }}
+      environment: sandbox
+      region:      me-west1
       action:      plan
     secrets: inherit
