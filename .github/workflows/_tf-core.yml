@@ -68,6 +68,7 @@ jobs:
     name: "Plan — ${{ matrix.module }}"
     needs: [discover]
     runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
     strategy:
       fail-fast: false  # plan all modules even if one fails
       matrix:
@@ -151,6 +152,7 @@ jobs:
     needs: [discover, plan]
     if: always()
     runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
     permissions:
       pull-requests: write
 
