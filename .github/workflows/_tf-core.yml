@@ -21,13 +21,9 @@ on:
         description: "Run plan only even when action=apply (safe preview)"
         type: boolean
         default: false
-    secrets:
-      WIF_PROVIDER:
-        required: true
-      SA_CI_TF_PLAN_EMAIL:
-        required: true
-      SA_CI_TF_APPLY_EMAIL:
-        required: false
+    # No secrets declared here — jobs access them directly from GitHub Environments
+    # via environment: ${{ inputs.environment }} on each job.
+    # secrets: inherit in callers only passes repo-level secrets, not environment secrets.
 
 # ── Job 1: Discover — find all stacks under the target env ──────────────────────
 jobs:
