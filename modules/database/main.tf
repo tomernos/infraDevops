@@ -56,6 +56,10 @@ resource "google_sql_database" "app_db" {
   name     = var.db_name
   instance = google_sql_database_instance.main.name
   project  = var.project_id
+
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 resource "google_sql_user" "app_user" {
@@ -63,4 +67,10 @@ resource "google_sql_user" "app_user" {
   instance = google_sql_database_instance.main.name
   password = random_password.db_password.result
   project  = var.project_id
+
+  lifecycle {
+    # Dropping this user fails while migrations have run — objects are owned by it.
+    # To destroy: REASSIGN OWNED BY sweptlock TO postgres; in psql first.
+    prevent_destroy = true
+  }
 }
