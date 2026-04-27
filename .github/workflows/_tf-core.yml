@@ -1,0 +1,348 @@
+name: "TF Core (reusable)"
+# Never triggered directly — called by tf-plan.yml and tf-apply.yml via workflow_call.
+# Owns all Terraform logic: discover → plan (parallel matrix) → summarize → apply (sequential).
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: "Target environment (must match folder under regions/<region>/)"
+        type: string
+        required: true
+      region:
+        description: "GCP region (must match folder under regions/)"
+        type: string
+        default: "me-west1"
+      action:
+        description: "plan or apply"
+        type: string
+        default: "plan"
+      dry_run:
+        description: "Run plan only even when action=apply (safe preview)"
+        type: boolean
+        default: false
+    secrets:
+      WIF_PROVIDER:
+        required: true
+      SA_CI_TF_PLAN_EMAIL:
+        required: true
+      SA_CI_TF_APPLY_EMAIL:
+        required: false
+
+# ── Job 1: Discover — find all stacks under the target env ──────────────────────
+jobs:
+  discover:
+    name: "Discover stacks"
+    runs-on: ubuntu-latest
+    outputs:
+      modules: ${{ steps.find.outputs.modules }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: "Find terragrunt stacks"
+        id: find
+        run: |
+          STACKS_DIR="regions/${{ inputs.region }}/${{ inputs.environment }}"
+
+          if [ ! -d "$STACKS_DIR" ]; then
+            echo "::error::Directory $STACKS_DIR not found. Check environment and region inputs."
+            exit 1
+          fi
+
+          # Find all terragrunt.hcl files, exclude cache, output sorted basenames as JSON array
+          MODULES=$(find "$STACKS_DIR" \
+            -name "terragrunt.hcl" \
+            -not -path "*/.terragrunt-cache/*" \
+            -not -path "*/root.hcl" \
+            | xargs -I{} dirname {} \
+            | xargs -I{} basename {} \
+            | sort \
+            | jq -R . | jq -sc .)
+
+          echo "modules=$MODULES" >> "$GITHUB_OUTPUT"
+          echo "Discovered: $MODULES"
+
+# ── Job 2: Plan — parallel matrix, one job per module ───────────────────────────
+  plan:
+    name: "Plan — ${{ matrix.module }}"
+    needs: [discover]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false  # plan all modules even if one fails
+      matrix:
+        module: ${{ fromJson(needs.discover.outputs.modules) }}
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: "Install Terraform"
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: "Install Terragrunt"
+        run: |
+          TG_VER=$(cat .terragrunt-version 2>/dev/null || echo "0.67.16")
+          curl -sSL "https://github.com/gruntwork-io/terragrunt/releases/download/v${TG_VER}/terragrunt_linux_amd64" \
+            -o /usr/local/bin/terragrunt
+          chmod +x /usr/local/bin/terragrunt
+
+      - name: "Authenticate to GCP"
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.SA_CI_TF_PLAN_EMAIL }}
+
+      - name: "Setup gcloud"
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: "terragrunt plan"
+        id: plan
+        working-directory: "regions/${{ inputs.region }}/${{ inputs.environment }}/${{ matrix.module }}"
+        run: |
+          EXIT=0
+          terragrunt plan --non-interactive -no-color 2>&1 | tee /tmp/raw.txt || EXIT=$?
+
+          PLAN_LINE=$(grep -E "^Plan:|No changes\." /tmp/raw.txt | tail -1 || true)
+
+          if   [ "$EXIT" -eq 1 ]; then
+            STATUS="error";      ICON="error"
+            ADDS=0; CHGS=0; DEST=0
+          elif [[ "$PLAN_LINE" == *"No changes"* ]] || [[ -z "$PLAN_LINE" ]]; then
+            STATUS="no-changes"; ICON="no-changes"
+            ADDS=0; CHGS=0; DEST=0
+          else
+            ADDS=$(echo "$PLAN_LINE" | grep -oP '\d+(?= to add)'     | head -1 || echo 0)
+            CHGS=$(echo "$PLAN_LINE" | grep -oP '\d+(?= to change)'  | head -1 || echo 0)
+            DEST=$(echo "$PLAN_LINE" | grep -oP '\d+(?= to destroy)' | head -1 || echo 0)
+            if [ "${DEST:-0}" -gt 0 ]; then STATUS="destroys"; ICON="destroys"
+            else                             STATUS="changes";  ICON="changes";  fi
+          fi
+
+          {
+            echo "status=$STATUS"
+            echo "icon=$ICON"
+            echo "adds=${ADDS:-0}"
+            echo "changes=${CHGS:-0}"
+            echo "destroys=${DEST:-0}"
+          } >> "$GITHUB_OUTPUT"
+
+          # Save output for artifact (summarize job reads this)
+          cp /tmp/raw.txt "${{ matrix.module }}-plan.txt"
+
+      - name: "Upload plan output"
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: "plan-${{ matrix.module }}"
+          path: "${{ matrix.module }}-plan.txt"
+          retention-days: 1
+
+# ── Job 3: Summarize — collect all results, post PR comment + job summary ────────
+  summarize:
+    name: "Summarize"
+    needs: [discover, plan]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: "Download all plan artifacts"
+        uses: actions/download-artifact@v4
+        with:
+          pattern: "plan-*"
+          path: /tmp/plans
+          merge-multiple: true
+
+      - name: "Build markdown summary"
+        id: build
+        run: |
+          MODULES='${{ needs.discover.outputs.modules }}'
+          ENV="${{ inputs.environment }}"
+          REGION="${{ inputs.region }}"
+          ACTION="${{ inputs.action }}"
+          SHA="${GITHUB_SHA::7}"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          OVERALL="No changes"
+          HAS_DESTROYS=false
+          TABLE=""
+          DETAILS=""
+
+          ICONS=(
+            "error=❌ Error"
+            "no-changes=✅ No changes"
+            "changes=📋 Changes"
+            "destroys=⚠️ Destroys"
+          )
+
+          for MOD in $(echo "$MODULES" | jq -r '.[]'); do
+            ARTIFACT="/tmp/plans/${MOD}-plan.txt"
+
+            if [ ! -f "$ARTIFACT" ]; then
+              TABLE+="| \`${MOD}\` | ⏭️ Skipped | — | — | — |\n"
+              continue
+            fi
+
+            PLAN_LINE=$(grep -E "^Plan:|No changes\." "$ARTIFACT" | tail -1 || true)
+            EXIT_HINT=$(grep -c "Error" "$ARTIFACT" || true)
+
+            if   [ "${EXIT_HINT}" -gt 2 ]; then
+              ICON="❌ Error"; ADDS=0; CHGS=0; DEST=0
+              OVERALL="Plan failed"
+            elif [[ "$PLAN_LINE" == *"No changes"* ]] || [[ -z "$PLAN_LINE" ]]; then
+              ICON="✅ No changes"; ADDS=0; CHGS=0; DEST=0
+            else
+              ADDS=$(echo "$PLAN_LINE" | grep -oP '\d+(?= to add)'     | head -1 || echo 0)
+              CHGS=$(echo "$PLAN_LINE" | grep -oP '\d+(?= to change)'  | head -1 || echo 0)
+              DEST=$(echo "$PLAN_LINE" | grep -oP '\d+(?= to destroy)' | head -1 || echo 0)
+              if [ "${DEST:-0}" -gt 0 ]; then
+                ICON="⚠️ Destroys"; HAS_DESTROYS=true
+                [[ "$OVERALL" != "Plan failed" ]] && OVERALL="Destroys planned"
+              else
+                ICON="📋 Changes"
+                [[ "$OVERALL" == "No changes" ]] && OVERALL="Changes pending"
+              fi
+            fi
+
+            TABLE+="| \`${MOD}\` | ${ICON} | ${ADDS} | ${CHGS} | ${DEST} |\n"
+
+            # Collapsible plan detail with resource-level diff
+            RESOURCE_DIFF=$(grep -E "^\s+(#|~|\+|-)\s" "$ARTIFACT" | head -25 || true)
+            FULL_PLAN=$(tail -c 6000 "$ARTIFACT")
+            DETAIL="<details><summary><b>${MOD}</b> — ${ICON}</summary>\n\n"
+            if [ -n "$RESOURCE_DIFF" ]; then
+              DETAIL+="**Resources changing:**\n\`\`\`hcl\n${RESOURCE_DIFF}\n\`\`\`\n\n"
+            fi
+            DETAIL+="\`\`\`hcl\n${FULL_PLAN}\n\`\`\`\n</details>\n\n"
+            DETAILS+="$DETAIL"
+          done
+
+          DESTROY_WARN=""
+          if [ "$HAS_DESTROYS" = "true" ]; then
+            DESTROY_WARN=$'\n'"**WARNING: This plan will destroy resources. Review before applying.**"$'\n'
+          fi
+
+          {
+            printf "## Terraform %s -- \`%s\` (\`%s\`)\n\n" "$ACTION" "$ENV" "$REGION"
+            printf "Commit: \`%s\` | Actor: @%s | [Run #%s](%s)\n\n" \
+              "$SHA" "${{ github.actor }}" "${{ github.run_number }}" "$RUN_URL"
+            printf "### Results\n\n"
+            printf "| Module | Status | Add | Change | Destroy |\n"
+            printf "|--------|--------|-----|--------|---------|\n"
+            printf "%b" "$TABLE"
+            printf "%s\n\n" "$DESTROY_WARN"
+            printf "### Details\n\n"
+            printf "%b" "$DETAILS"
+          } > /tmp/summary.md
+
+          echo "overall=$OVERALL" >> "$GITHUB_OUTPUT"
+          cat /tmp/summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: "Post or update PR comment"
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- tf-plan-sweptlock -->';
+            const body = marker + '\n' + fs.readFileSync('/tmp/summary.md', 'utf8');
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner, repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const existing = comments.find(c => c.body.startsWith(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                comment_id: existing.id, body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: context.issue.number, body,
+              });
+            }
+
+# ── Job 4: Apply — sequential, runs only when action=apply ───────────────────────
+# Terragrunt run --all apply handles dependency ordering automatically.
+  apply:
+    name: "Apply"
+    needs: [discover, plan, summarize]
+    if: inputs.action == 'apply' && !inputs.dry_run && needs.plan.result != 'failure'
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ inputs.environment }}
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: "Install Terraform"
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: "Install Terragrunt"
+        run: |
+          TG_VER=$(cat .terragrunt-version 2>/dev/null || echo "0.67.16")
+          curl -sSL "https://github.com/gruntwork-io/terragrunt/releases/download/v${TG_VER}/terragrunt_linux_amd64" \
+            -o /usr/local/bin/terragrunt
+          chmod +x /usr/local/bin/terragrunt
+
+      - name: "Authenticate to GCP"
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.SA_CI_TF_APPLY_EMAIL }}
+
+      - name: "Setup gcloud"
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: "Apply all stacks"
+        working-directory: "regions/${{ inputs.region }}/${{ inputs.environment }}"
+        run: |
+          # Terragrunt resolves dependency order automatically from dependency{} blocks
+          terragrunt run --all apply --non-interactive -auto-approve 2>&1 | tee /tmp/apply-output.txt
+
+      - name: "Write apply summary"
+        if: always()
+        run: |
+          {
+            echo "## Terraform Apply -- \`${{ inputs.environment }}\`"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Status | ${{ job.status }} |"
+            echo "| Commit | \`${GITHUB_SHA::7}\` |"
+            echo "| Actor  | @${{ github.actor }} |"
+            echo ""
+            echo "<details><summary>Apply output</summary>"
+            echo ""
+            echo '```'
+            tail -c 10000 /tmp/apply-output.txt
+            echo '```'
+            echo ""
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+env:
+  TF_VERSION: "1.9.8"
+  PROJECT_ID: "cryptoshare-e5172"
