@@ -1,3 +1,8 @@
+locals {
+  # app_github_owner defaults to github_owner if not explicitly set
+  app_owner = var.app_github_owner != "" ? var.app_github_owner : var.github_owner
+}
+
 # ── Workload Identity Federation Pool ────────────────────────────────────────
 
 resource "google_iam_workload_identity_pool" "github" {
@@ -13,8 +18,8 @@ resource "google_iam_workload_identity_pool_provider" "github" {
   display_name                       = "GitHub OIDC"
   project                            = var.project_id
 
-  # Only tokens from the tomernos GitHub owner are accepted
-  attribute_condition = "assertion.repository_owner == '${var.github_owner}'"
+  # Accept tokens from infra owner OR app owner (may be different GitHub users)
+  attribute_condition = "assertion.repository_owner in ['${var.github_owner}', '${local.app_owner}']"
 
   attribute_mapping = {
     "google.subject"             = "assertion.sub"
@@ -49,7 +54,7 @@ resource "google_service_account" "sa_ci_tf_plan" {
 
 # Runs terragrunt apply on merge to main (used by infra repo)
 resource "google_service_account" "sa_ci_tf_apply" {
-  account_id   = "${var.name_prefix}-sa-ci-tf-apply"
+  account_id   = "${var.name_prefix}-sa-tf-apply"
   display_name = "CI Terraform Apply Sandbox"
   description  = "Apply SA for sandbox infrastructure changes"
   project      = var.project_id
@@ -60,7 +65,7 @@ resource "google_service_account" "sa_ci_tf_apply" {
 resource "google_service_account_iam_member" "ci_deploy_wif" {
   service_account_id = google_service_account.sa_ci_deploy.name
   role               = "roles/iam.workloadIdentityUser"
-  member             = "principalSet://iam.googleapis.com/${google_iam_workload_identity_pool.github.name}/attribute.repository/${var.github_owner}/${var.app_repo}"
+  member             = "principalSet://iam.googleapis.com/${google_iam_workload_identity_pool.github.name}/attribute.repository/${local.app_owner}/${var.app_repo}"
 }
 
 resource "google_service_account_iam_member" "ci_tf_plan_wif" {

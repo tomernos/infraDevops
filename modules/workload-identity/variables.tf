@@ -4,7 +4,13 @@ variable "name_prefix"  { type = string }
 
 variable "github_owner" {
   type        = string
-  description = "GitHub user or org owning both repos (e.g. tomernos)"
+  description = "GitHub user owning the infra repo (e.g. tomernos)"
+}
+
+variable "app_github_owner" {
+  type        = string
+  description = "GitHub user owning the app repo — may differ from infra owner"
+  default     = ""  # defaults to github_owner if not set
 }
 
 variable "app_repo" {

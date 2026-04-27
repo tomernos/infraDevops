@@ -15,10 +15,11 @@ dependency "security" {
 }
 
 inputs = {
-  name_prefix  = "swpt-mw1-sandbox"
-  github_owner = "tomernos"
-  app_repo     = "Aladin"
-  infra_repo   = "sweptlock-infra"
-  state_bucket = "swpt-mw1-infra-sandbox-tf"
-  sa_api_email = dependency.security.outputs.sa_api_email
+  name_prefix      = "swpt-mw1-sandbox"
+  github_owner     = "tomernos"
+  app_github_owner = "eladrz"
+  app_repo         = "Aladin"
+  infra_repo       = "infraDevops"
+  state_bucket     = "swpt-mw1-infra-sandbox-tf"
+  sa_api_email     = dependency.security.outputs.sa_api_email
 }
