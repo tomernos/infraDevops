@@ -1,13 +1,15 @@
 name: "Terraform Plan"
-# Runs automatically on PRs to main when infra files change.
-# For manual runs: use "Terraform Apply" with dry_run checked.
+# Runs on PRs — plan only, no apply.
+# Posts per-module plan results as a PR comment for review.
+# Use tf-apply.yml to apply after review.
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, staging, prod]
     paths:
-      - "**.tf"
-      - "**.hcl"
+      - "modules/**"
+      - "regions/**"
+      - "root.hcl"
       - ".github/workflows/tf-plan.yml"
       - ".github/workflows/_tf-core.yml"
 
@@ -16,14 +18,35 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Determine environment from the PR target branch — no user input needed
+  setup:
+    name: "Determine environment"
+    runs-on: ubuntu-latest
+    outputs:
+      environment: ${{ steps.resolve.outputs.environment }}
+      region:      ${{ steps.resolve.outputs.region }}
+    steps:
+      - name: "Resolve env from target branch"
+        id: resolve
+        run: |
+          case "${{ github.base_ref }}" in
+            prod)    ENV="prod";    REGION="me-west1" ;;
+            staging) ENV="staging"; REGION="me-west1" ;;
+            *)       ENV="sandbox"; REGION="me-west1" ;;
+          esac
+          echo "environment=$ENV"  >> "$GITHUB_OUTPUT"
+          echo "region=$REGION"    >> "$GITHUB_OUTPUT"
+          echo "Resolved: env=$ENV region=$REGION"
+
   core:
+    needs: [setup]
     permissions:
       contents: read
       id-token: write
       pull-requests: write
     uses: ./.github/workflows/_tf-core.yml
     with:
-      environment: sandbox
-      region:      me-west1
+      environment: ${{ needs.setup.outputs.environment }}
+      region:      ${{ needs.setup.outputs.region }}
       action:      plan
     secrets: inherit

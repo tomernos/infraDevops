@@ -1,38 +1,53 @@
 name: "Terraform Apply"
-# Manual trigger — select environment and region.
-# Flow: plan → summarize (post comment) → approve (human reviews plan) → apply (safety-checked)
+# Triggered on merge to main/staging/prod — automatically determines environment from branch.
+# Flow: plan → summarize (comment) → approve (reviewer sees plan → approves) → apply (safety-checked)
 #
-# Required GitHub Environments:
-#   <env>        — holds WIF_PROVIDER, SA_CI_TF_PLAN_EMAIL, SA_CI_TF_APPLY_EMAIL secrets
-#   <env>-apply  — required reviewers (the approval gate, no secrets needed)
+# GitHub Environments required per real environment:
+#   <env>        — secrets: WIF_PROVIDER, SA_CI_TF_PLAN_EMAIL, SA_CI_TF_APPLY_EMAIL
+#   <env>-apply  — required reviewers (no secrets — this is only the approval gate)
 
 on:
-  workflow_dispatch:
-    inputs:
-      environment:
-        description: "Environment to apply"
-        type: choice
-        options: [sandbox]
-        default: sandbox
-      region:
-        description: "GCP region"
-        type: choice
-        options: [me-west1]
-        default: me-west1
+  push:
+    branches: [main, staging, prod]
+    paths:
+      - "modules/**"
+      - "regions/**"
+      - "root.hcl"
 
 concurrency:
-  group: tf-apply-${{ inputs.environment }}
-  cancel-in-progress: false
+  group: tf-apply-${{ github.ref_name }}
+  cancel-in-progress: false  # never cancel an in-progress apply
 
 jobs:
+  # Determine environment from the branch that was pushed to — no user input needed
+  setup:
+    name: "Determine environment"
+    runs-on: ubuntu-latest
+    outputs:
+      environment: ${{ steps.resolve.outputs.environment }}
+      region:      ${{ steps.resolve.outputs.region }}
+    steps:
+      - name: "Resolve env from branch"
+        id: resolve
+        run: |
+          case "${{ github.ref_name }}" in
+            prod)    ENV="prod";    REGION="me-west1" ;;
+            staging) ENV="staging"; REGION="me-west1" ;;
+            *)       ENV="sandbox"; REGION="me-west1" ;;
+          esac
+          echo "environment=$ENV"  >> "$GITHUB_OUTPUT"
+          echo "region=$REGION"    >> "$GITHUB_OUTPUT"
+          echo "Resolved: env=$ENV region=$REGION (branch=${{ github.ref_name }})"
+
   core:
+    needs: [setup]
     permissions:
       contents: read
       id-token: write
       pull-requests: write
     uses: ./.github/workflows/_tf-core.yml
     with:
-      environment: ${{ inputs.environment }}
-      region:      ${{ inputs.region }}
+      environment: ${{ needs.setup.outputs.environment }}
+      region:      ${{ needs.setup.outputs.region }}
       action:      apply
     secrets: inherit
