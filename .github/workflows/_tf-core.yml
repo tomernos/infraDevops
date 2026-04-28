@@ -153,7 +153,7 @@ jobs:
           terragrunt plan --terragrunt-non-interactive -no-color 2>&1 \
             | tee /tmp/plan-output.txt || EXIT=$?
 
-          PLAN_LINE=$(grep -E "^Plan:|No changes\." /tmp/plan-output.txt | tail -1 || true)
+          PLAN_LINE=$(grep -E "Plan: [0-9]|No changes\." /tmp/plan-output.txt | tail -1 || true)
 
           if [ "$EXIT" -eq 1 ]; then
             STATUS="error"; ADDS=0; CHGS=0; DEST=0; HAS_CHANGES=false
