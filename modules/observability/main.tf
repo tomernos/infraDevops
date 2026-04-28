@@ -136,7 +136,8 @@ resource "google_monitoring_alert_policy" "vm_cpu" {
 # ── Budget alert ──────────────────────────────────────────────────────────────
 
 resource "google_billing_budget" "main" {
-  billing_account = data.google_project.main.billing_account
+  count           = var.billing_account_id != "" ? 1 : 0
+  billing_account = var.billing_account_id
   display_name    = "${var.name_prefix}-budget"
 
   budget_filter {
@@ -171,6 +172,3 @@ resource "google_billing_budget" "main" {
   }
 }
 
-data "google_project" "main" {
-  project_id = var.project_id
-}

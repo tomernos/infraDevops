@@ -17,3 +17,9 @@ variable "monthly_budget_usd" {
   description = "Monthly spend threshold in USD before budget alerts fire"
   default     = 150
 }
+
+variable "billing_account_id" {
+  type        = string
+  description = "GCP billing account ID (e.g. XXXXXX-XXXXXX-XXXXXX). Leave empty to skip budget alert."
+  default     = ""
+}
