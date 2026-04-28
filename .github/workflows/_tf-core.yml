@@ -1,12 +1,15 @@
 name: "TF Core (reusable)"
 # Never triggered directly — called by tf-plan.yml and tf-apply.yml.
 #
-# Flow when action=plan:   discover → plan (parallel) → summarize
-# Flow when action=apply:  discover → plan (parallel) → summarize → approve → apply
+# Flow when action=plan:   check → (skip if no changes) → discover → plan (parallel) → summarize
+# Flow when action=apply:  check → (skip if no changes) → discover → plan (parallel) → summarize → approve → apply → post-result
+#
+# Adopted from friend's pipeline: changed-files check, skip-if-no-changes, continue-on-error on
+# plan (artifacts saved even on failure), apply-only-if-changes gate, apply result PR comment.
 #
 # GitHub Environments required per real env (e.g. "sandbox"):
-#   sandbox        — holds secrets (WIF_PROVIDER, SA_CI_TF_PLAN_EMAIL, SA_CI_TF_APPLY_EMAIL), no reviewers
-#   sandbox-apply  — required reviewers only, no secrets (this is the human approval gate)
+#   sandbox        — secrets: WIF_PROVIDER, SA_CI_TF_PLAN_EMAIL, SA_CI_TF_APPLY_EMAIL (no reviewers)
+#   sandbox-apply  — required reviewers (no secrets — approval gate only)
 
 on:
   workflow_call:
@@ -23,11 +26,48 @@ on:
         description: "plan or apply"
         type: string
         default: "plan"
+      always_plan:
+        description: "Force plan even if no infra files changed (useful for debugging)"
+        type: boolean
+        default: false
 
-# ── Job 1: Discover ───────────────────────────────────────────────────────────
+# ── Job 1: Check — skip pipeline if no infra files changed ────────────────────
 jobs:
+  check:
+    name: "Check for changes"
+    runs-on: ubuntu-latest
+    outputs:
+      has_changes: ${{ steps.changed.outputs.any_changed }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: "Detect changed infra files"
+        id: changed
+        uses: tj-actions/changed-files@v46
+        with:
+          files_yaml: |
+            any:
+              - 'modules/**'
+              - 'regions/${{ inputs.region }}/${{ inputs.environment }}/**'
+              - 'root.hcl'
+              - '.github/workflows/_tf-core.yml'
+
+      - name: "Report"
+        run: |
+          echo "has_changes=${{ steps.changed.outputs.any_changed }}"
+          echo "always_plan=${{ inputs.always_plan }}"
+          if [ "${{ steps.changed.outputs.any_changed }}" = "false" ] && [ "${{ inputs.always_plan }}" = "false" ]; then
+            echo "::notice::No infra files changed — skipping plan/apply."
+          fi
+
+# ── Job 2: Discover — find all stacks ─────────────────────────────────────────
   discover:
     name: "Discover stacks"
+    needs: [check]
+    if: needs.check.outputs.has_changes == 'true' || inputs.always_plan
     runs-on: ubuntu-latest
     outputs:
       modules: ${{ steps.find.outputs.modules }}
@@ -53,7 +93,7 @@ jobs:
           echo "modules=$MODULES" >> "$GITHUB_OUTPUT"
           echo "Discovered: $MODULES"
 
-# ── Job 2: Plan — parallel matrix, one job per module ────────────────────────
+# ── Job 3: Plan — parallel matrix, one job per module ─────────────────────────
   plan:
     name: "Plan — ${{ matrix.module }}"
     needs: [discover]
@@ -94,8 +134,11 @@ jobs:
         with:
           project_id: ${{ env.PROJECT_ID }}
 
+      # continue-on-error so artifact is always uploaded even when plan fails
       - name: "Plan ${{ matrix.module }}"
+        id: plan
         working-directory: "regions/${{ inputs.region }}/${{ inputs.environment }}/${{ matrix.module }}"
+        continue-on-error: true
         run: |
           EXIT=0
           terragrunt plan --terragrunt-non-interactive -no-color 2>&1 \
@@ -104,15 +147,18 @@ jobs:
           PLAN_LINE=$(grep -E "^Plan:|No changes\." /tmp/plan-output.txt | tail -1 || true)
 
           if [ "$EXIT" -eq 1 ]; then
-            STATUS="error"; ADDS=0; CHGS=0; DEST=0
+            STATUS="error"; ADDS=0; CHGS=0; DEST=0; HAS_CHANGES=false
           elif [[ "$PLAN_LINE" == *"No changes"* ]] || [[ -z "$PLAN_LINE" ]]; then
-            STATUS="no-changes"; ADDS=0; CHGS=0; DEST=0
+            STATUS="no-changes"; ADDS=0; CHGS=0; DEST=0; HAS_CHANGES=false
           else
             ADDS=$(echo "$PLAN_LINE" | grep -oP '\d+(?= to add)'     | head -1 || echo 0)
             CHGS=$(echo "$PLAN_LINE" | grep -oP '\d+(?= to change)'  | head -1 || echo 0)
             DEST=$(echo "$PLAN_LINE" | grep -oP '\d+(?= to destroy)' | head -1 || echo 0)
+            HAS_CHANGES=true
             if [ "${DEST:-0}" -gt 0 ]; then STATUS="destroys"; else STATUS="changes"; fi
           fi
+
+          echo "has_changes=$HAS_CHANGES" >> "$GITHUB_OUTPUT"
 
           mkdir -p /tmp/artifact
           cp /tmp/plan-output.txt /tmp/artifact/output.txt
@@ -126,14 +172,24 @@ jobs:
           name: "plan-${{ matrix.module }}"
           path: /tmp/artifact/
           retention-days: 3
+          if-no-files-found: warn
 
-# ── Job 3: Summarize — build PR comment + job summary ─────────────────────────
+      # Explicit fail after artifact upload — mirrors friend's continue-on-error pattern
+      - name: "Fail if plan errored"
+        if: steps.plan.outcome == 'failure'
+        run: |
+          echo "::error::Plan failed for ${{ matrix.module }}"
+          exit 1
+
+# ── Job 4: Summarize — build PR comment + job summary ─────────────────────────
   summarize:
     name: "Summarize"
     needs: [discover, plan]
-    if: always()
+    if: always() && needs.discover.result == 'success'
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
+    outputs:
+      has_changes: ${{ steps.build.outputs.has_changes }}
     permissions:
       pull-requests: write
 
@@ -148,9 +204,11 @@ jobs:
           merge-multiple: false
 
       - name: "Build summary"
+        id: build
         run: |
           MODULES='${{ needs.discover.outputs.modules }}'
           OVERALL="No changes"
+          HAS_CHANGES=false
           HAS_DESTROYS=false
           TABLE=""
           DETAILS=""
@@ -166,10 +224,16 @@ jobs:
               DEST=$(sed -n '4p' "$META")
 
               case "$STATUS" in
-                error)      ICON="Error";      OVERALL="Plan failed" ;;
-                no-changes) ICON="No changes" ;;
-                destroys)   ICON="Destroys";   HAS_DESTROYS=true; [ "$OVERALL" != "Plan failed" ] && OVERALL="Destroys planned" ;;
-                changes)    ICON="Changes";    [ "$OVERALL" == "No changes" ] && OVERALL="Changes pending" ;;
+                error)
+                  ICON="Error"; OVERALL="Plan failed" ;;
+                no-changes)
+                  ICON="No changes" ;;
+                destroys)
+                  ICON="Destroys"; HAS_CHANGES=true; HAS_DESTROYS=true
+                  [ "$OVERALL" != "Plan failed" ] && OVERALL="Destroys planned" ;;
+                changes)
+                  ICON="Changes"; HAS_CHANGES=true
+                  [ "$OVERALL" == "No changes" ] && OVERALL="Changes pending" ;;
               esac
             else
               ICON="Skipped"; ADDS="-"; CHGS="-"; DEST="-"
@@ -187,24 +251,32 @@ jobs:
           done
 
           WARN=""
-          [ "$HAS_DESTROYS" = "true" ] && WARN=$'\n'"**WARNING: This plan destroys resources. Review carefully.**"$'\n'
+          [ "$HAS_DESTROYS" = "true" ] && WARN=$'\n'"**WARNING: This plan destroys resources. Review carefully before approving.**"$'\n'
+
+          NEXT_STEP=""
+          if [ "${{ inputs.action }}" = "apply" ] && [ "$HAS_CHANGES" = "true" ]; then
+            NEXT_STEP=$'\n'"---"$'\n'"**Next:** approve this run in the [GitHub Actions UI](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) to apply."
+          elif [ "$HAS_CHANGES" = "false" ]; then
+            NEXT_STEP=$'\n'"**No infrastructure changes — apply will be skipped.**"
+          fi
 
           SHA="${GITHUB_SHA::7}"
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
           {
             printf "## Terraform %s -- \`%s\` (\`%s\`)\n\n" "${{ inputs.action }}" "${{ inputs.environment }}" "${{ inputs.region }}"
-            printf "Commit: \`%s\` | Actor: @%s | [Run #%s](%s)\n\n" "$SHA" "${{ github.actor }}" "${{ github.run_number }}" "$RUN_URL"
+            printf "Commit: [\`%s\`](%s/commit/%s) | @%s | [Run #%s](%s)\n\n" \
+              "$SHA" "${{ github.server_url }}/${{ github.repository }}" "${{ github.sha }}" \
+              "${{ github.actor }}" "${{ github.run_number }}" "$RUN_URL"
             printf "| Module | Status | Add | Change | Destroy |\n"
             printf "|--------|--------|-----|--------|---------|\n"
             printf "%s" "$TABLE"
             printf "%s\n\n" "$WARN"
             printf "### Module Details\n\n%s" "$DETAILS"
-            if [ "${{ inputs.action }}" = "apply" ]; then
-              printf "---\n**Next:** approve this run in the GitHub Actions UI to apply.\n"
-            fi
+            printf "%s\n" "$NEXT_STEP"
           } > /tmp/summary.md
 
+          echo "has_changes=$HAS_CHANGES" >> "$GITHUB_OUTPUT"
           cat /tmp/summary.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: "Post or update PR comment"
@@ -232,33 +304,37 @@ jobs:
               });
             }
 
-# ── Job 4: Approve — human reviews the plan and approves here ─────────────────
-# The "sandbox-apply" GitHub Environment must have required reviewers configured.
-# Reviewer sees the plan in the summarize job summary, then approves this job.
+# ── Job 5: Approve — human reviews plan and approves here ─────────────────────
+# Only runs when action=apply AND there are actual changes to apply.
+# "sandbox-apply" environment must have required reviewers configured.
   approve:
     name: "Approve apply"
     needs: [summarize]
-    if: inputs.action == 'apply'
+    if: |
+      inputs.action == 'apply' &&
+      needs.summarize.outputs.has_changes == 'true'
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}-apply
 
     steps:
-      - name: "Confirmed"
+      - name: "Plan approved"
         run: |
           echo "Apply approved by: ${{ github.actor }}"
-          echo "Environment: ${{ inputs.environment }}"
-          echo "Region: ${{ inputs.region }}"
+          echo "Environment: ${{ inputs.environment }} (${{ inputs.region }})"
 
-# ── Job 5: Apply — runs after human approval, safety-checks before applying ───
+# ── Job 6: Apply — safety-checked apply using approved plan metadata ───────────
   apply:
     name: "Apply"
     needs: [discover, approve]
-    if: inputs.action == 'apply'
+    if: |
+      inputs.action == 'apply' &&
+      needs.approve.result == 'success'
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
     permissions:
       contents: read
       id-token: write
+      pull-requests: write
 
     steps:
       - uses: actions/checkout@v4
@@ -287,61 +363,60 @@ jobs:
         with:
           project_id: ${{ env.PROJECT_ID }}
 
-      - name: "Download approved plan artifacts"
+      - name: "Download approved plan metadata"
         uses: actions/download-artifact@v4
         with:
           pattern: "plan-*"
           path: /tmp/approved-plans
           merge-multiple: false
 
-      - name: "Safety check — verify no new destroys since approval"
+      - name: "Safety check — no new destroys since approval"
         working-directory: "regions/${{ inputs.region }}/${{ inputs.environment }}"
         run: |
           MODULES='${{ needs.discover.outputs.modules }}'
           BLOCKED=false
 
           for MOD in $(echo "$MODULES" | jq -r '.[]'); do
-            APPROVED_META="/tmp/approved-plans/plan-${MOD}/meta.txt"
+            META="/tmp/approved-plans/plan-${MOD}/meta.txt"
             APPROVED_DEST=0
-            [ -f "$APPROVED_META" ] && APPROVED_DEST=$(sed -n '4p' "$APPROVED_META" || echo 0)
+            [ -f "$META" ] && APPROVED_DEST=$(sed -n '4p' "$META" || echo 0)
 
-            CURRENT_EXIT=0
             CURRENT_OUT=$(cd "./${MOD}" && terragrunt plan \
-              --terragrunt-non-interactive -no-color 2>&1) || CURRENT_EXIT=$?
-
+              --terragrunt-non-interactive -no-color 2>&1 || true)
             CURRENT_DEST=$(echo "$CURRENT_OUT" | grep -oP '\d+(?= to destroy)' | head -1 || echo 0)
 
             if [ "${CURRENT_DEST:-0}" -gt "${APPROVED_DEST:-0}" ]; then
-              echo "::error::$MOD: ${CURRENT_DEST} destroys now vs ${APPROVED_DEST} when approved — re-run plan"
+              echo "::error::$MOD: ${CURRENT_DEST} destroys now vs ${APPROVED_DEST} at approval — re-run plan workflow"
               BLOCKED=true
             else
-              echo "  OK  $MOD: destroys=${CURRENT_DEST} (approved: ${APPROVED_DEST})"
+              echo "  OK  $MOD (destroys: ${CURRENT_DEST}, approved: ${APPROVED_DEST})"
             fi
           done
 
-          if [ "$BLOCKED" = "true" ]; then
-            echo "::error::Apply blocked — plan changed since approval. Re-run the plan workflow."
-            exit 1
-          fi
+          $BLOCKED && exit 1 || true
 
       - name: "Apply all stacks"
+        id: apply
         working-directory: "regions/${{ inputs.region }}/${{ inputs.environment }}"
+        continue-on-error: true
         run: |
           terragrunt run --all apply \
             --terragrunt-non-interactive \
             -auto-approve 2>&1 | tee /tmp/apply-output.txt
 
-      - name: "Apply summary"
+      - name: "Write apply summary"
         if: always()
         run: |
+          STATUS="${{ steps.apply.outcome }}"
+          ICON="✅"
+          [ "$STATUS" != "success" ] && ICON="❌"
+
           {
-            echo "## Apply Result -- \`${{ inputs.environment }}\`"
-            echo "| | |"
-            echo "|---|---|"
-            echo "| Status | ${{ job.status }} |"
-            echo "| Commit | \`${GITHUB_SHA::7}\` |"
-            echo "| Actor  | @${{ github.actor }} |"
-            echo ""
+            printf "## %s Terraform Apply -- \`%s\`\n\n" "$ICON" "${{ inputs.environment }}"
+            printf "| | |\n|---|---|\n"
+            printf "| Status | %s |\n" "$STATUS"
+            printf "| Commit | \`%s\` |\n" "${GITHUB_SHA::7}"
+            printf "| Actor  | @%s |\n\n" "${{ github.actor }}"
             echo "<details><summary>Apply output</summary>"
             echo ""
             echo '```'
@@ -349,7 +424,56 @@ jobs:
             echo '```'
             echo ""
             echo "</details>"
-          } >> "$GITHUB_STEP_SUMMARY"
+          } > /tmp/apply-summary.md
+
+          cat /tmp/apply-summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      # Post apply result back to PR — mirrors friend's pattern of keeping PR as the audit trail
+      - name: "Post apply result to PR"
+        if: github.event_name == 'pull_request' || github.event_name == 'push'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- tf-apply-sweptlock -->';
+            const summary = fs.readFileSync('/tmp/apply-summary.md', 'utf8');
+            const body = marker + '\n' + summary;
+
+            // Find the PR associated with this commit (for push events)
+            let issueNumber = context.issue?.number;
+            if (!issueNumber && context.eventName === 'push') {
+              const { data: prs } = await github.rest.repos.listPullRequestsAssociatedWithCommit({
+                owner: context.repo.owner, repo: context.repo.repo,
+                commit_sha: context.sha,
+              });
+              if (prs.length > 0) issueNumber = prs[0].number;
+            }
+
+            if (!issueNumber) {
+              console.log('No PR found for this commit — skipping comment');
+              return;
+            }
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner, repo: context.repo.repo,
+              issue_number: issueNumber,
+            });
+            const existing = comments.find(c => c.body.startsWith(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                comment_id: existing.id, body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: issueNumber, body,
+              });
+            }
+
+      - name: "Fail if apply errored"
+        if: steps.apply.outcome == 'failure'
+        run: exit 1
 
 env:
   PROJECT_ID: "cryptoshare-e5172"
