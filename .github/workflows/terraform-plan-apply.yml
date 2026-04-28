@@ -1,0 +1,32 @@
+name: Terraform Plan and Apply
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+  
+on:
+  pull_request:
+    branches:
+      - main
+      - master
+      - dev
+      - staging
+      - prod
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  deploy-azure:
+    strategy:
+      matrix:
+        env: ['dev', 'stg', 'management']
+    if: (github.event.pull_request.base.ref == 'prod' || github.event.pull_request.base.ref == 'master' || github.event.pull_request.base.ref == 'main' || github.event.pull_request.base.ref == 'dev')
+    uses: ElectraOrg/cicd-shared/.github/workflows/terraform-deploy.yaml@main
+    with:
+      env: ${{ matrix.env }}
+      runner-group: 'dofinity-ai'
+      tf_storage_sub_id: "9bbd9c35-ed3b-41b2-a31f-342ab8f9469e" #mgmt subscription
+    secrets: inherit 

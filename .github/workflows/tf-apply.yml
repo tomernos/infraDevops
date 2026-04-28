@@ -1,6 +1,10 @@
 name: "Terraform Apply"
-# Manual only — select environment and region from the GitHub Actions UI.
-# Plans first, then applies (or dry-run = plan only, no apply).
+# Manual trigger — select environment and region.
+# Flow: plan → summarize (post comment) → approve (human reviews plan) → apply (safety-checked)
+#
+# Required GitHub Environments:
+#   <env>        — holds WIF_PROVIDER, SA_CI_TF_PLAN_EMAIL, SA_CI_TF_APPLY_EMAIL secrets
+#   <env>-apply  — required reviewers (the approval gate, no secrets needed)
 
 on:
   workflow_dispatch:
@@ -15,10 +19,10 @@ on:
         type: choice
         options: [me-west1]
         default: me-west1
-      dry_run:
-        description: "Dry run — plan only, do not apply"
-        type: boolean
-        default: false
+
+concurrency:
+  group: tf-apply-${{ inputs.environment }}
+  cancel-in-progress: false
 
 jobs:
   core:
@@ -31,5 +35,4 @@ jobs:
       environment: ${{ inputs.environment }}
       region:      ${{ inputs.region }}
       action:      apply
-      dry_run:     ${{ inputs.dry_run }}
     secrets: inherit
