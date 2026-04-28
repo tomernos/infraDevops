@@ -37,7 +37,7 @@ jobs:
     name: "Check for changes"
     runs-on: ubuntu-latest
     outputs:
-      has_changes: ${{ steps.changed.outputs.any_changed }}
+      has_changes: ${{ steps.detect.outputs.has_changes }}
 
     steps:
       - uses: actions/checkout@v4
@@ -45,22 +45,31 @@ jobs:
           fetch-depth: 0
 
       - name: "Detect changed infra files"
-        id: changed
-        uses: tj-actions/changed-files@v46
-        with:
-          files_yaml: |
-            any:
-              - 'modules/**'
-              - 'regions/${{ inputs.region }}/${{ inputs.environment }}/**'
-              - 'root.hcl'
-              - '.github/workflows/_tf-core.yml'
-
-      - name: "Report"
+        id: detect
         run: |
-          echo "has_changes=${{ steps.changed.outputs.any_changed }}"
-          echo "always_plan=${{ inputs.always_plan }}"
-          if [ "${{ steps.changed.outputs.any_changed }}" = "false" ] && [ "${{ inputs.always_plan }}" = "false" ]; then
-            echo "::notice::No infra files changed — skipping plan/apply."
+          # PR event: compare head against base branch
+          # Push event: compare against previous commit
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE="origin/${{ github.base_ref }}"
+            CHANGED=$(git diff --name-only "${BASE}...HEAD" 2>/dev/null || git diff --name-only HEAD~1 HEAD)
+          else
+            CHANGED=$(git diff --name-only HEAD~1 HEAD 2>/dev/null || echo "")
+          fi
+
+          echo "Changed files:"
+          echo "$CHANGED"
+
+          if echo "$CHANGED" | grep -qE \
+            "^(modules/|regions/${{ inputs.region }}/${{ inputs.environment }}/|root\.hcl|\.github/workflows/_tf-core\.yml)"; then
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Infra changes detected — running plan."
+          else
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+            if [ "${{ inputs.always_plan }}" = "true" ]; then
+              echo "::notice::No infra changes but always_plan=true — running plan anyway."
+            else
+              echo "::notice::No infra files changed — skipping plan/apply."
+            fi
           fi
 
 # ── Job 2: Discover — find all stacks ─────────────────────────────────────────
