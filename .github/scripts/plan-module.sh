@@ -14,7 +14,7 @@ echo "::group::📋 $MODULE — terragrunt plan"
 cd "$STACK_DIR"
 
 PLAN_EXIT=0
-terragrunt plan --non-interactive -no-color 2>&1 | tee "$OUTPUT_FILE" || PLAN_EXIT=$?
+terragrunt plan --terragrunt-non-interactive -no-color 2>&1 | tee "$OUTPUT_FILE" || PLAN_EXIT=$?
 
 echo "::endgroup::"
 
