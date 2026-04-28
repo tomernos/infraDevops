@@ -251,11 +251,37 @@ jobs:
             TABLE+="| \`${MOD}\` | ${ICON} | ${ADDS} | ${CHGS} | ${DEST} |"$'\n'
 
             if [ -f "$OUT" ]; then
-              DIFF=$(grep -E "^\s+(#|~|\+|-)\s" "$OUT" | head -20 || true)
+              # Parse resource-level changes from Terragrunt output.
+              # Terragrunt prefixes lines: "STDERR terraform:   # resource.addr will be created"
+              RESOURCE_TABLE=""
+              while IFS= read -r line; do
+                if echo "$line" | grep -qE "# .* will be (created|updated|destroyed|replaced|modified)|must be replaced"; then
+                  ADDR=$(echo "$line" | grep -oP '(?<=# )[\w.\[\]"_-]+')
+                  if echo "$line" | grep -q "will be created";               then ACT="**+** create"
+                  elif echo "$line" | grep -q "will be updated\|will be modified"; then ACT="**~** update"
+                  elif echo "$line" | grep -q "will be destroyed";           then ACT="**-** destroy"
+                  elif echo "$line" | grep -q "must be replaced";            then ACT="**±** replace"
+                  else ACT="**?** change"; fi
+                  RESOURCE_TABLE+="| ${ACT} | \`${ADDR}\` |"$'\n'
+                fi
+              done < "$OUT"
+
               FULL=$(tail -c 5000 "$OUT")
-              DETAILS+="<details><summary><b>${MOD}</b> -- ${ICON}</summary>"$'\n\n'
-              [ -n "$DIFF" ] && DETAILS+="**Changed resources:**"$'\n''```hcl'$'\n'"${DIFF}"$'\n''```'$'\n\n'
-              DETAILS+='```hcl'$'\n'"${FULL}"$'\n''```'$'\n'"</details>"$'\n\n'
+
+              DETAILS+="<details>"$'\n'
+              DETAILS+="<summary><b>${MOD}</b> &nbsp;—&nbsp; ${ICON} &nbsp;(+${ADDS} ~${CHGS} -${DEST})</summary>"$'\n\n'
+
+              if [ -n "$RESOURCE_TABLE" ]; then
+                DETAILS+="| Action | Resource |"$'\n'
+                DETAILS+="|--------|----------|"$'\n'
+                DETAILS+="${RESOURCE_TABLE}"$'\n'
+              fi
+
+              DETAILS+="<details>"$'\n'
+              DETAILS+="<summary>Full plan output</summary>"$'\n\n'
+              DETAILS+='```hcl'$'\n'"${FULL}"$'\n''```'$'\n'
+              DETAILS+="</details>"$'\n'
+              DETAILS+="</details>"$'\n\n'
             fi
           done
 
