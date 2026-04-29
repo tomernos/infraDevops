@@ -1,21 +1,29 @@
 name: "TF Core (reusable)"
-# Never triggered directly — called by tf-plan.yml and tf-apply.yml.
+# Never triggered directly — called by tf-plan.yml (PR) and tf-apply.yml (merge).
 #
-# Flow when action=plan:   check → (skip if no changes) → discover → plan (parallel) → summarize
-# Flow when action=apply:  check → (skip if no changes) → discover → plan (parallel) → summarize → approve → apply → post-result
+# Single-environment model:
+#   - Plan/summarize jobs do NOT bind to a GitHub Environment.
+#     They use repo-level secrets (WIF_PROVIDER, SA_CI_TF_PLAN_EMAIL).
+#     Plan SA has read-only / low blast radius.
+#   - Apply job binds to `environment: ${{ inputs.environment }}`.
+#     The environment's required-reviewers list IS the approval gate.
+#     Apply SA (SA_CI_TF_APPLY_EMAIL) lives as an environment secret.
+#   - No separate approve job — environment binding is the gate.
 #
-# Adopted from friend's pipeline: changed-files check, skip-if-no-changes, continue-on-error on
-# plan (artifacts saved even on failure), apply-only-if-changes gate, apply result PR comment.
+# Environments are folders under regions/<region>/<env>/, not git branches.
+# Both plan and apply auto-detect affected envs in the parent workflow.
+# project_id is resolved here per env name — single source of truth.
 #
-# GitHub Environments required per real env (e.g. "sandbox"):
-#   sandbox        — secrets: WIF_PROVIDER, SA_CI_TF_PLAN_EMAIL, SA_CI_TF_APPLY_EMAIL (no reviewers)
-#   sandbox-apply  — required reviewers (no secrets — approval gate only)
+# Required secrets:
+#   Repo:                                  WIF_PROVIDER, SA_CI_TF_PLAN_EMAIL
+#   Env (sandbox / staging / prod):        SA_CI_TF_APPLY_EMAIL
+#                                          + required reviewers under environment protection rules
 
 on:
   workflow_call:
     inputs:
       environment:
-        description: "Target environment — must match folder under regions/<region>/"
+        description: "Target env — must match folder under regions/<region>/"
         type: string
         required: true
       region:
@@ -26,61 +34,40 @@ on:
         description: "plan or apply"
         type: string
         default: "plan"
-      always_plan:
-        description: "Force plan even if no infra files changed (useful for debugging)"
-        type: boolean
-        default: false
 
-# ── Job 1: Check — skip pipeline if no infra files changed ────────────────────
+env:
+  TF_INPUT: "false"
+  TF_IN_AUTOMATION: "true"
+
 jobs:
-  check:
-    name: "Check for changes"
+  # ── 1. setup — resolve project_id from environment name ───────────────────
+  setup:
+    name: "Resolve project"
     runs-on: ubuntu-latest
     outputs:
-      has_changes: ${{ steps.detect.outputs.has_changes }}
-
+      project_id: ${{ steps.resolve.outputs.project_id }}
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: "Detect changed infra files"
-        id: detect
+      - name: "Resolve GCP project for env"
+        id: resolve
         run: |
-          # PR event: compare head against base branch
-          # Push event: compare against previous commit
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            BASE="origin/${{ github.base_ref }}"
-            CHANGED=$(git diff --name-only "${BASE}...HEAD" 2>/dev/null || git diff --name-only HEAD~1 HEAD)
-          else
-            CHANGED=$(git diff --name-only HEAD~1 HEAD 2>/dev/null || echo "")
-          fi
+          case "${{ inputs.environment }}" in
+            sandbox) PROJECT="cryptoshare-e5172" ;;
+            staging) PROJECT="sweptlock-staging" ;;
+            prod)    PROJECT="sweptlock-prod" ;;
+            *)
+              echo "::error::Unknown environment '${{ inputs.environment }}' — add a case here when adding a new env"
+              exit 1 ;;
+          esac
+          echo "project_id=$PROJECT" >> "$GITHUB_OUTPUT"
+          echo "env=${{ inputs.environment }} region=${{ inputs.region }} project=$PROJECT"
 
-          echo "Changed files:"
-          echo "$CHANGED"
-
-          if echo "$CHANGED" | grep -qE \
-            "^(modules/|regions/${{ inputs.region }}/${{ inputs.environment }}/|root\.hcl|\.github/workflows/_tf-core\.yml)"; then
-            echo "has_changes=true" >> "$GITHUB_OUTPUT"
-            echo "::notice::Infra changes detected — running plan."
-          else
-            echo "has_changes=false" >> "$GITHUB_OUTPUT"
-            if [ "${{ inputs.always_plan }}" = "true" ]; then
-              echo "::notice::No infra changes but always_plan=true — running plan anyway."
-            else
-              echo "::notice::No infra files changed — skipping plan/apply."
-            fi
-          fi
-
-# ── Job 2: Discover — find all stacks ─────────────────────────────────────────
+  # ── 2. discover — list terragrunt stacks for this env ─────────────────────
   discover:
     name: "Discover stacks"
-    needs: [check]
-    if: needs.check.outputs.has_changes == 'true' || inputs.always_plan
+    needs: [setup]
     runs-on: ubuntu-latest
     outputs:
       modules: ${{ steps.find.outputs.modules }}
-
     steps:
       - uses: actions/checkout@v4
 
@@ -89,7 +76,7 @@ jobs:
         run: |
           DIR="regions/${{ inputs.region }}/${{ inputs.environment }}"
           if [ ! -d "$DIR" ]; then
-            echo "::error::$DIR not found — check environment and region inputs"
+            echo "::error::$DIR not found — env folder does not exist"
             exit 1
           fi
           MODULES=$(find "$DIR" \
@@ -102,12 +89,12 @@ jobs:
           echo "modules=$MODULES" >> "$GITHUB_OUTPUT"
           echo "Discovered: $MODULES"
 
-# ── Job 3: Plan — parallel matrix, one job per module ─────────────────────────
+  # ── 3. plan — parallel matrix, one job per module ─────────────────────────
+  # No `environment:` binding. Uses repo-level secrets (plan SA).
   plan:
     name: "Plan — ${{ matrix.module }}"
-    needs: [discover]
+    needs: [setup, discover]
     runs-on: ubuntu-latest
-    environment: ${{ inputs.environment }}
     strategy:
       fail-fast: false
       matrix:
@@ -115,35 +102,16 @@ jobs:
     permissions:
       contents: read
       id-token: write
-
     steps:
       - uses: actions/checkout@v4
 
-      - name: "Install Terraform"
-        uses: hashicorp/setup-terraform@v3
+      - name: "Setup Terraform + Terragrunt + GCP auth"
+        uses: ./.github/actions/tf-setup
         with:
-          terraform_version: "1.9.8"
-          terraform_wrapper: false
+          service-account: ${{ secrets.SA_CI_TF_PLAN_EMAIL }}
+          wif-provider: ${{ secrets.WIF_PROVIDER }}
+          project-id: ${{ needs.setup.outputs.project_id }}
 
-      - name: "Install Terragrunt"
-        run: |
-          VER=$(cat .terragrunt-version 2>/dev/null || echo "0.67.16")
-          curl -sSL "https://github.com/gruntwork-io/terragrunt/releases/download/v${VER}/terragrunt_linux_amd64" \
-            -o /usr/local/bin/terragrunt
-          chmod +x /usr/local/bin/terragrunt
-
-      - name: "Authenticate to GCP"
-        uses: google-github-actions/auth@v2
-        with:
-          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
-          service_account: ${{ secrets.SA_CI_TF_PLAN_EMAIL }}
-
-      - name: "Setup gcloud"
-        uses: google-github-actions/setup-gcloud@v2
-        with:
-          project_id: ${{ env.PROJECT_ID }}
-
-      # continue-on-error so artifact is always uploaded even when plan fails
       - name: "Plan ${{ matrix.module }}"
         id: plan
         working-directory: "regions/${{ inputs.region }}/${{ inputs.environment }}/${{ matrix.module }}"
@@ -153,21 +121,19 @@ jobs:
           terragrunt plan --terragrunt-non-interactive -no-color 2>&1 \
             | tee /tmp/plan-output.txt || EXIT=$?
 
+          # Terragrunt prefixes lines with timestamps — match anywhere on the line.
           PLAN_LINE=$(grep -E "Plan: [0-9]|No changes\." /tmp/plan-output.txt | tail -1 || true)
 
           if [ "$EXIT" -eq 1 ]; then
-            STATUS="error"; ADDS=0; CHGS=0; DEST=0; HAS_CHANGES=false
+            STATUS="error"; ADDS=0; CHGS=0; DEST=0
           elif [[ "$PLAN_LINE" == *"No changes"* ]] || [[ -z "$PLAN_LINE" ]]; then
-            STATUS="no-changes"; ADDS=0; CHGS=0; DEST=0; HAS_CHANGES=false
+            STATUS="no-changes"; ADDS=0; CHGS=0; DEST=0
           else
             ADDS=$(echo "$PLAN_LINE" | grep -oP '\d+(?= to add)'     | head -1 || echo 0)
             CHGS=$(echo "$PLAN_LINE" | grep -oP '\d+(?= to change)'  | head -1 || echo 0)
             DEST=$(echo "$PLAN_LINE" | grep -oP '\d+(?= to destroy)' | head -1 || echo 0)
-            HAS_CHANGES=true
             if [ "${DEST:-0}" -gt 0 ]; then STATUS="destroys"; else STATUS="changes"; fi
           fi
-
-          echo "has_changes=$HAS_CHANGES" >> "$GITHUB_OUTPUT"
 
           mkdir -p /tmp/artifact
           cp /tmp/plan-output.txt /tmp/artifact/output.txt
@@ -178,37 +144,35 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: "plan-${{ matrix.module }}"
+          name: "plan-${{ inputs.environment }}-${{ matrix.module }}"
           path: /tmp/artifact/
           retention-days: 3
           if-no-files-found: warn
 
-      # Explicit fail after artifact upload — mirrors friend's continue-on-error pattern
       - name: "Fail if plan errored"
         if: steps.plan.outcome == 'failure'
         run: |
           echo "::error::Plan failed for ${{ matrix.module }}"
           exit 1
 
-# ── Job 4: Summarize — build PR comment + job summary ─────────────────────────
+  # ── 4. summarize — build PR comment + run summary ─────────────────────────
   summarize:
     name: "Summarize"
     needs: [discover, plan]
     if: always() && needs.discover.result == 'success'
     runs-on: ubuntu-latest
-    environment: ${{ inputs.environment }}
     outputs:
       has_changes: ${{ steps.build.outputs.has_changes }}
+      has_destroys: ${{ steps.build.outputs.has_destroys }}
     permissions:
       pull-requests: write
-
     steps:
       - uses: actions/checkout@v4
 
       - name: "Download plan artifacts"
         uses: actions/download-artifact@v4
         with:
-          pattern: "plan-*"
+          pattern: "plan-${{ inputs.environment }}-*"
           path: /tmp/plans
           merge-multiple: false
 
@@ -216,15 +180,16 @@ jobs:
         id: build
         run: |
           MODULES='${{ needs.discover.outputs.modules }}'
-          OVERALL="No changes"
+          OVERALL_ICON="✅"
+          OVERALL_TEXT="No changes"
           HAS_CHANGES=false
           HAS_DESTROYS=false
           TABLE=""
           DETAILS=""
 
           for MOD in $(echo "$MODULES" | jq -r '.[]'); do
-            META="/tmp/plans/plan-${MOD}/meta.txt"
-            OUT="/tmp/plans/plan-${MOD}/output.txt"
+            META="/tmp/plans/plan-${{ inputs.environment }}-${MOD}/meta.txt"
+            OUT="/tmp/plans/plan-${{ inputs.environment }}-${MOD}/output.txt"
 
             if [ -f "$META" ]; then
               STATUS=$(sed -n '1p' "$META")
@@ -234,34 +199,40 @@ jobs:
 
               case "$STATUS" in
                 error)
-                  ICON="Error"; OVERALL="Plan failed" ;;
+                  ICON="❌ Error"
+                  OVERALL_ICON="❌"; OVERALL_TEXT="Plan failed" ;;
                 no-changes)
-                  ICON="No changes" ;;
+                  ICON="✅ No changes" ;;
                 destroys)
-                  ICON="Destroys"; HAS_CHANGES=true; HAS_DESTROYS=true
-                  [ "$OVERALL" != "Plan failed" ] && OVERALL="Destroys planned" ;;
+                  ICON="⚠️ Destroys"
+                  HAS_CHANGES=true; HAS_DESTROYS=true
+                  if [ "$OVERALL_TEXT" != "Plan failed" ]; then
+                    OVERALL_ICON="⚠️"; OVERALL_TEXT="Destroys planned"
+                  fi ;;
                 changes)
-                  ICON="Changes"; HAS_CHANGES=true
-                  [ "$OVERALL" == "No changes" ] && OVERALL="Changes pending" ;;
+                  ICON="📋 Changes"
+                  HAS_CHANGES=true
+                  if [ "$OVERALL_TEXT" = "No changes" ]; then
+                    OVERALL_ICON="📋"; OVERALL_TEXT="Changes pending"
+                  fi ;;
               esac
             else
-              ICON="Skipped"; ADDS="-"; CHGS="-"; DEST="-"
+              ICON="⏭️ Skipped"; ADDS="-"; CHGS="-"; DEST="-"
             fi
 
             TABLE+="| \`${MOD}\` | ${ICON} | ${ADDS} | ${CHGS} | ${DEST} |"$'\n'
 
             if [ -f "$OUT" ]; then
-              # Parse resource-level changes from Terragrunt output.
-              # Terragrunt prefixes lines: "STDERR terraform:   # resource.addr will be created"
+              # Per-resource action table — strip Terragrunt timestamp prefix when matching.
               RESOURCE_TABLE=""
               while IFS= read -r line; do
                 if echo "$line" | grep -qE "# .* will be (created|updated|destroyed|replaced|modified)|must be replaced"; then
                   ADDR=$(echo "$line" | grep -oP '(?<=# )[\w.\[\]"_-]+')
-                  if echo "$line" | grep -q "will be created";               then ACT="**+** create"
-                  elif echo "$line" | grep -q "will be updated\|will be modified"; then ACT="**~** update"
-                  elif echo "$line" | grep -q "will be destroyed";           then ACT="**-** destroy"
-                  elif echo "$line" | grep -q "must be replaced";            then ACT="**±** replace"
-                  else ACT="**?** change"; fi
+                  if   echo "$line" | grep -q "will be created";                       then ACT="\`+\` create"
+                  elif echo "$line" | grep -qE "will be (updated|modified)";           then ACT="\`~\` update"
+                  elif echo "$line" | grep -q "will be destroyed";                     then ACT="\`-\` destroy"
+                  elif echo "$line" | grep -qE "(must be replaced|will be replaced)";  then ACT="\`±\` replace"
+                  else ACT="\`?\` change"; fi
                   RESOURCE_TABLE+="| ${ACT} | \`${ADDR}\` |"$'\n'
                 fi
               done < "$OUT"
@@ -270,15 +241,12 @@ jobs:
 
               DETAILS+="<details>"$'\n'
               DETAILS+="<summary><b>${MOD}</b> &nbsp;—&nbsp; ${ICON} &nbsp;(+${ADDS} ~${CHGS} -${DEST})</summary>"$'\n\n'
-
               if [ -n "$RESOURCE_TABLE" ]; then
                 DETAILS+="| Action | Resource |"$'\n'
                 DETAILS+="|--------|----------|"$'\n'
                 DETAILS+="${RESOURCE_TABLE}"$'\n'
               fi
-
-              DETAILS+="<details>"$'\n'
-              DETAILS+="<summary>Full plan output</summary>"$'\n\n'
+              DETAILS+="<details><summary>Full plan output</summary>"$'\n\n'
               DETAILS+='```hcl'$'\n'"${FULL}"$'\n''```'$'\n'
               DETAILS+="</details>"$'\n'
               DETAILS+="</details>"$'\n\n'
@@ -286,20 +254,22 @@ jobs:
           done
 
           WARN=""
-          [ "$HAS_DESTROYS" = "true" ] && WARN=$'\n'"**WARNING: This plan destroys resources. Review carefully before approving.**"$'\n'
+          [ "$HAS_DESTROYS" = "true" ] && WARN=$'\n'"> ⚠️ **This plan destroys resources. Review carefully before approving the apply.**"$'\n'
 
           NEXT_STEP=""
           if [ "${{ inputs.action }}" = "apply" ] && [ "$HAS_CHANGES" = "true" ]; then
             NEXT_STEP=$'\n'"---"$'\n'"**Next:** approve this run in the [GitHub Actions UI](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) to apply."
           elif [ "$HAS_CHANGES" = "false" ]; then
-            NEXT_STEP=$'\n'"**No infrastructure changes — apply will be skipped.**"
+            NEXT_STEP=$'\n'"_No infrastructure changes — apply will be skipped._"
           fi
 
           SHA="${GITHUB_SHA::7}"
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          ACTION_TITLE=$(echo "${{ inputs.action }}" | sed 's/./\U&/')
 
           {
-            printf "## Terraform %s -- \`%s\` (\`%s\`)\n\n" "${{ inputs.action }}" "${{ inputs.environment }}" "${{ inputs.region }}"
+            printf "## %s Terraform %s — \`%s\` (\`%s\`)\n\n" "$OVERALL_ICON" "$ACTION_TITLE" "${{ inputs.environment }}" "${{ inputs.region }}"
+            printf "**Overall:** %s %s\n\n" "$OVERALL_ICON" "$OVERALL_TEXT"
             printf "Commit: [\`%s\`](%s/commit/%s) | @%s | [Run #%s](%s)\n\n" \
               "$SHA" "${{ github.server_url }}/${{ github.repository }}" "${{ github.sha }}" \
               "${{ github.actor }}" "${{ github.run_number }}" "$RUN_URL"
@@ -312,15 +282,20 @@ jobs:
           } > /tmp/summary.md
 
           echo "has_changes=$HAS_CHANGES" >> "$GITHUB_OUTPUT"
+          echo "has_destroys=$HAS_DESTROYS" >> "$GITHUB_OUTPUT"
           cat /tmp/summary.md >> "$GITHUB_STEP_SUMMARY"
 
+      # PR comment — only on PR events. Sticky marker is per-env so multi-env PRs don't overwrite each other.
       - name: "Post or update PR comment"
         if: github.event_name == 'pull_request'
         uses: actions/github-script@v7
+        env:
+          ENV_NAME: ${{ inputs.environment }}
         with:
           script: |
             const fs = require('fs');
-            const marker = '<!-- tf-plan-sweptlock -->';
+            const env = process.env.ENV_NAME;
+            const marker = `<!-- tf-plan-sweptlock:${env} -->`;
             const body = marker + '\n' + fs.readFileSync('/tmp/summary.md', 'utf8');
             const { data: comments } = await github.rest.issues.listComments({
               owner: context.repo.owner, repo: context.repo.repo,
@@ -339,69 +314,35 @@ jobs:
               });
             }
 
-# ── Job 5: Approve — human reviews plan and approves here ─────────────────────
-# Only runs when action=apply AND there are actual changes to apply.
-# "sandbox-apply" environment must have required reviewers configured.
-  approve:
-    name: "Approve apply"
-    needs: [summarize]
-    if: |
-      inputs.action == 'apply' &&
-      needs.summarize.outputs.has_changes == 'true'
-    runs-on: ubuntu-latest
-    environment: ${{ inputs.environment }}-apply
-
-    steps:
-      - name: "Plan approved"
-        run: |
-          echo "Apply approved by: ${{ github.actor }}"
-          echo "Environment: ${{ inputs.environment }} (${{ inputs.region }})"
-
-# ── Job 6: Apply — safety-checked apply using approved plan metadata ───────────
+  # ── 5. apply — environment-gated, runs only on action=apply with changes ──
+  # `environment: ${{ inputs.environment }}` is the approval gate.
+  # Skipped (no reviewer prompt) when there are no changes.
   apply:
     name: "Apply"
-    needs: [discover, approve]
+    needs: [setup, discover, summarize]
     if: |
       inputs.action == 'apply' &&
-      needs.approve.result == 'success'
+      needs.summarize.result == 'success' &&
+      needs.summarize.outputs.has_changes == 'true'
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
     permissions:
       contents: read
       id-token: write
-      pull-requests: write
-
     steps:
       - uses: actions/checkout@v4
 
-      - name: "Install Terraform"
-        uses: hashicorp/setup-terraform@v3
+      - name: "Setup Terraform + Terragrunt + GCP auth"
+        uses: ./.github/actions/tf-setup
         with:
-          terraform_version: "1.9.8"
-          terraform_wrapper: false
-
-      - name: "Install Terragrunt"
-        run: |
-          VER=$(cat .terragrunt-version 2>/dev/null || echo "0.67.16")
-          curl -sSL "https://github.com/gruntwork-io/terragrunt/releases/download/v${VER}/terragrunt_linux_amd64" \
-            -o /usr/local/bin/terragrunt
-          chmod +x /usr/local/bin/terragrunt
-
-      - name: "Authenticate to GCP"
-        uses: google-github-actions/auth@v2
-        with:
-          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
-          service_account: ${{ secrets.SA_CI_TF_APPLY_EMAIL }}
-
-      - name: "Setup gcloud"
-        uses: google-github-actions/setup-gcloud@v2
-        with:
-          project_id: ${{ env.PROJECT_ID }}
+          service-account: ${{ secrets.SA_CI_TF_APPLY_EMAIL }}
+          wif-provider: ${{ secrets.WIF_PROVIDER }}
+          project-id: ${{ needs.setup.outputs.project_id }}
 
       - name: "Download approved plan metadata"
         uses: actions/download-artifact@v4
         with:
-          pattern: "plan-*"
+          pattern: "plan-${{ inputs.environment }}-*"
           path: /tmp/approved-plans
           merge-multiple: false
 
@@ -412,12 +353,11 @@ jobs:
           BLOCKED=false
 
           for MOD in $(echo "$MODULES" | jq -r '.[]'); do
-            META="/tmp/approved-plans/plan-${MOD}/meta.txt"
+            META="/tmp/approved-plans/plan-${{ inputs.environment }}-${MOD}/meta.txt"
             APPROVED_DEST=0
             [ -f "$META" ] && APPROVED_DEST=$(sed -n '4p' "$META" || echo 0)
 
-            CURRENT_OUT=$(cd "./${MOD}" && terragrunt plan \
-              --terragrunt-non-interactive -no-color 2>&1 || true)
+            CURRENT_OUT=$(cd "./${MOD}" && terragrunt plan --terragrunt-non-interactive -no-color 2>&1 || true)
             CURRENT_DEST=$(echo "$CURRENT_OUT" | grep -oP '\d+(?= to destroy)' | head -1 || echo 0)
 
             if [ "${CURRENT_DEST:-0}" -gt "${APPROVED_DEST:-0}" ]; then
@@ -435,9 +375,8 @@ jobs:
         working-directory: "regions/${{ inputs.region }}/${{ inputs.environment }}"
         continue-on-error: true
         run: |
-          terragrunt run --all apply \
-            --terragrunt-non-interactive \
-            -auto-approve 2>&1 | tee /tmp/apply-output.txt
+          terragrunt run --all apply --terragrunt-non-interactive -auto-approve 2>&1 \
+            | tee /tmp/apply-output.txt
 
       - name: "Write apply summary"
         if: always()
@@ -447,7 +386,7 @@ jobs:
           [ "$STATUS" != "success" ] && ICON="❌"
 
           {
-            printf "## %s Terraform Apply -- \`%s\`\n\n" "$ICON" "${{ inputs.environment }}"
+            printf "## %s Terraform Apply — \`%s\`\n\n" "$ICON" "${{ inputs.environment }}"
             printf "| | |\n|---|---|\n"
             printf "| Status | %s |\n" "$STATUS"
             printf "| Commit | \`%s\` |\n" "${GITHUB_SHA::7}"
@@ -463,52 +402,6 @@ jobs:
 
           cat /tmp/apply-summary.md >> "$GITHUB_STEP_SUMMARY"
 
-      # Post apply result back to PR — mirrors friend's pattern of keeping PR as the audit trail
-      - name: "Post apply result to PR"
-        if: github.event_name == 'pull_request' || github.event_name == 'push'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const fs = require('fs');
-            const marker = '<!-- tf-apply-sweptlock -->';
-            const summary = fs.readFileSync('/tmp/apply-summary.md', 'utf8');
-            const body = marker + '\n' + summary;
-
-            // Find the PR associated with this commit (for push events)
-            let issueNumber = context.issue?.number;
-            if (!issueNumber && context.eventName === 'push') {
-              const { data: prs } = await github.rest.repos.listPullRequestsAssociatedWithCommit({
-                owner: context.repo.owner, repo: context.repo.repo,
-                commit_sha: context.sha,
-              });
-              if (prs.length > 0) issueNumber = prs[0].number;
-            }
-
-            if (!issueNumber) {
-              console.log('No PR found for this commit — skipping comment');
-              return;
-            }
-
-            const { data: comments } = await github.rest.issues.listComments({
-              owner: context.repo.owner, repo: context.repo.repo,
-              issue_number: issueNumber,
-            });
-            const existing = comments.find(c => c.body.startsWith(marker));
-            if (existing) {
-              await github.rest.issues.updateComment({
-                owner: context.repo.owner, repo: context.repo.repo,
-                comment_id: existing.id, body,
-              });
-            } else {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner, repo: context.repo.repo,
-                issue_number: issueNumber, body,
-              });
-            }
-
       - name: "Fail if apply errored"
         if: steps.apply.outcome == 'failure'
         run: exit 1
-
-env:
-  PROJECT_ID: "cryptoshare-e5172"

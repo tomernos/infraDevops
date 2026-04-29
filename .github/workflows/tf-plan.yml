@@ -1,52 +1,83 @@
 name: "Terraform Plan"
-# Runs on PRs — plan only, no apply.
-# Posts per-module plan results as a PR comment for review.
-# Use tf-apply.yml to apply after review.
+# Triggered on PRs to main only. Single long-lived branch.
+# Environments are folders, not branches: regions/<region>/<env>/.
+#
+# Detects which env folders the PR touches, then matrix-calls _tf-core
+# once per affected env. Shared changes (modules/, root.hcl, workflow files)
+# trigger plans for ALL existing env folders.
 
 on:
   pull_request:
-    branches: [main, staging, prod]
+    branches: [main]
     paths:
       - "modules/**"
       - "regions/**"
       - "root.hcl"
       - ".github/workflows/tf-plan.yml"
       - ".github/workflows/_tf-core.yml"
+      - ".github/actions/tf-setup/**"
 
 concurrency:
   group: tf-plan-${{ github.head_ref }}
   cancel-in-progress: true
 
 jobs:
-  # Determine environment from the PR target branch — no user input needed
-  setup:
-    name: "Determine environment"
+  detect:
+    name: "Detect changed environments"
     runs-on: ubuntu-latest
     outputs:
-      environment: ${{ steps.resolve.outputs.environment }}
-      region:      ${{ steps.resolve.outputs.region }}
+      envs: ${{ steps.detect.outputs.envs }}
+      region: ${{ steps.detect.outputs.region }}
     steps:
-      - name: "Resolve env from target branch"
-        id: resolve
-        run: |
-          case "${{ github.base_ref }}" in
-            prod)    ENV="prod";    REGION="me-west1" ;;
-            staging) ENV="staging"; REGION="me-west1" ;;
-            *)       ENV="sandbox"; REGION="me-west1" ;;
-          esac
-          echo "environment=$ENV"  >> "$GITHUB_OUTPUT"
-          echo "region=$REGION"    >> "$GITHUB_OUTPUT"
-          echo "Resolved: env=$ENV region=$REGION"
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-  core:
-    needs: [setup]
+      - name: "Detect"
+        id: detect
+        run: |
+          REGION="me-west1"
+          BASE="origin/${{ github.base_ref }}"
+          CHANGED=$(git diff --name-only "${BASE}...HEAD" 2>/dev/null || git diff --name-only HEAD~1 HEAD)
+
+          echo "Changed files:"
+          echo "$CHANGED"
+          echo ""
+
+          # Shared changes affect every environment — plan them all.
+          SHARED_RX="^(modules/|root\.hcl|\.github/workflows/_tf-core\.yml|\.github/actions/tf-setup/)"
+          if echo "$CHANGED" | grep -qE "$SHARED_RX"; then
+            ENVS=$(find "regions/$REGION" -maxdepth 1 -mindepth 1 -type d \
+              -not -name "_*" \
+              -printf "%f\n" 2>/dev/null \
+              | sort | jq -R . | jq -sc .)
+            echo "::notice::Shared infra change — planning all envs: $ENVS"
+          else
+            ENVS=$(echo "$CHANGED" \
+              | grep -oP "^regions/$REGION/\K[^/]+" \
+              | sort -u | jq -R . | jq -sc .)
+            echo "::notice::Per-env change detected: $ENVS"
+          fi
+
+          [ -z "$ENVS" ] || [ "$ENVS" = "null" ] && ENVS="[]"
+          echo "envs=$ENVS" >> "$GITHUB_OUTPUT"
+          echo "region=$REGION" >> "$GITHUB_OUTPUT"
+
+  plan:
+    name: "Plan ${{ matrix.env }}"
+    needs: [detect]
+    if: needs.detect.outputs.envs != '[]'
     permissions:
       contents: read
       id-token: write
       pull-requests: write
+    strategy:
+      fail-fast: false
+      matrix:
+        env: ${{ fromJson(needs.detect.outputs.envs) }}
     uses: ./.github/workflows/_tf-core.yml
     with:
-      environment: ${{ needs.setup.outputs.environment }}
-      region:      ${{ needs.setup.outputs.region }}
+      environment: ${{ matrix.env }}
+      region:      ${{ needs.detect.outputs.region }}
       action:      plan
     secrets: inherit
