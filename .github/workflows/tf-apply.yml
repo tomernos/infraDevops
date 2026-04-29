@@ -1,53 +1,84 @@
 name: "Terraform Apply"
-# Triggered on merge to main/staging/prod — automatically determines environment from branch.
-# Flow: plan → summarize (comment) → approve (reviewer sees plan → approves) → apply (safety-checked)
+# Triggered on merge (push) to main only. Single long-lived branch.
+# Environments are folders, not branches: regions/<region>/<env>/.
 #
-# GitHub Environments required per real environment:
-#   <env>        — secrets: WIF_PROVIDER, SA_CI_TF_PLAN_EMAIL, SA_CI_TF_APPLY_EMAIL
-#   <env>-apply  — required reviewers (no secrets — this is only the approval gate)
+# Detect logic mirrors tf-plan.yml (same git diff against the previous commit on main).
+# For each affected env, calls _tf-core which:
+#   1. plans the env (artifacts uploaded)
+#   2. summarizes (has_changes signal)
+#   3. apply step runs ONLY if has_changes == true AND env reviewers approve
+#      (the env's GitHub Environment is the approval gate — separate per env)
 
 on:
   push:
-    branches: [main, staging, prod]
+    branches: [main]
     paths:
       - "modules/**"
       - "regions/**"
       - "root.hcl"
+      - ".github/workflows/tf-apply.yml"
+      - ".github/workflows/_tf-core.yml"
+      - ".github/actions/tf-setup/**"
 
 concurrency:
   group: tf-apply-${{ github.ref_name }}
-  cancel-in-progress: false  # never cancel an in-progress apply
+  cancel-in-progress: false   # never cancel an in-progress apply
 
 jobs:
-  # Determine environment from the branch that was pushed to — no user input needed
-  setup:
-    name: "Determine environment"
+  detect:
+    name: "Detect changed environments"
     runs-on: ubuntu-latest
     outputs:
-      environment: ${{ steps.resolve.outputs.environment }}
-      region:      ${{ steps.resolve.outputs.region }}
+      envs: ${{ steps.detect.outputs.envs }}
+      region: ${{ steps.detect.outputs.region }}
     steps:
-      - name: "Resolve env from branch"
-        id: resolve
-        run: |
-          case "${{ github.ref_name }}" in
-            prod)    ENV="prod";    REGION="me-west1" ;;
-            staging) ENV="staging"; REGION="me-west1" ;;
-            *)       ENV="sandbox"; REGION="me-west1" ;;
-          esac
-          echo "environment=$ENV"  >> "$GITHUB_OUTPUT"
-          echo "region=$REGION"    >> "$GITHUB_OUTPUT"
-          echo "Resolved: env=$ENV region=$REGION (branch=${{ github.ref_name }})"
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2   # need previous commit to diff against
 
-  core:
-    needs: [setup]
+      - name: "Detect"
+        id: detect
+        run: |
+          REGION="me-west1"
+          CHANGED=$(git diff --name-only HEAD~1 HEAD)
+
+          echo "Changed files:"
+          echo "$CHANGED"
+          echo ""
+
+          # Shared changes affect every environment — apply them all.
+          SHARED_RX="^(modules/|root\.hcl|\.github/workflows/_tf-core\.yml|\.github/actions/tf-setup/)"
+          if echo "$CHANGED" | grep -qE "$SHARED_RX"; then
+            ENVS=$(find "regions/$REGION" -maxdepth 1 -mindepth 1 -type d \
+              -not -name "_*" \
+              -printf "%f\n" 2>/dev/null \
+              | sort | jq -R . | jq -sc .)
+            echo "::notice::Shared infra change — applying all envs: $ENVS"
+          else
+            ENVS=$(echo "$CHANGED" \
+              | grep -oP "^regions/$REGION/\K[^/]+" \
+              | sort -u | jq -R . | jq -sc .)
+            echo "::notice::Per-env change detected: $ENVS"
+          fi
+
+          [ -z "$ENVS" ] || [ "$ENVS" = "null" ] && ENVS="[]"
+          echo "envs=$ENVS" >> "$GITHUB_OUTPUT"
+          echo "region=$REGION" >> "$GITHUB_OUTPUT"
+
+  apply:
+    name: "Apply ${{ matrix.env }}"
+    needs: [detect]
+    if: needs.detect.outputs.envs != '[]'
     permissions:
       contents: read
       id-token: write
-      pull-requests: write
+    strategy:
+      fail-fast: false
+      matrix:
+        env: ${{ fromJson(needs.detect.outputs.envs) }}
     uses: ./.github/workflows/_tf-core.yml
     with:
-      environment: ${{ needs.setup.outputs.environment }}
-      region:      ${{ needs.setup.outputs.region }}
+      environment: ${{ matrix.env }}
+      region:      ${{ needs.detect.outputs.region }}
       action:      apply
     secrets: inherit

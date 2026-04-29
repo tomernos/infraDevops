@@ -34,6 +34,11 @@ resource "google_compute_instance" "api" {
   # Tags must match firewall target_tags
   tags = ["allow-iap-ssh", "sweptlock-backend"]
 
+  labels = {
+    managed-by  = "terraform"
+    environment = var.name_prefix
+  }
+
   boot_disk {
     initialize_params {
       image = "debian-cloud/debian-12"

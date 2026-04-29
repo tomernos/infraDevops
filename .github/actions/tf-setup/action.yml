@@ -1,0 +1,41 @@
+name: "TF Setup"
+description: "Install Terraform, Terragrunt, and authenticate to GCP via WIF"
+
+inputs:
+  service-account:
+    description: "GCP service account email to impersonate"
+    required: true
+  wif-provider:
+    description: "Workload Identity Federation provider URI"
+    required: true
+  project-id:
+    description: "GCP project ID"
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: "Install Terraform"
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: "1.9.8"
+        terraform_wrapper: false
+
+    - name: "Install Terragrunt"
+      shell: bash
+      run: |
+        VER=$(cat .terragrunt-version 2>/dev/null || echo "0.67.16")
+        curl -sSL "https://github.com/gruntwork-io/terragrunt/releases/download/v${VER}/terragrunt_linux_amd64" \
+          -o /usr/local/bin/terragrunt
+        chmod +x /usr/local/bin/terragrunt
+
+    - name: "Authenticate to GCP"
+      uses: google-github-actions/auth@v2
+      with:
+        workload_identity_provider: ${{ inputs.wif-provider }}
+        service_account: ${{ inputs.service-account }}
+
+    - name: "Setup gcloud"
+      uses: google-github-actions/setup-gcloud@v2
+      with:
+        project_id: ${{ inputs.project-id }}
