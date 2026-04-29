@@ -178,132 +178,152 @@ jobs:
 
       - name: "Build summary"
         id: build
+        env:
+          MODULES: '${{ needs.discover.outputs.modules }}'
+          ENV_NAME: '${{ inputs.environment }}'
+          REGION: '${{ inputs.region }}'
+          ACTION: '${{ inputs.action }}'
+          GH_SHA: '${{ github.sha }}'
+          GH_ACTOR: '${{ github.actor }}'
+          GH_RUN_NUMBER: '${{ github.run_number }}'
+          GH_RUN_URL: '${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}'
+          GH_REPO_URL: '${{ github.server_url }}/${{ github.repository }}'
         run: |
-          MODULES='${{ needs.discover.outputs.modules }}'
-          OVERALL_ICON="✅"
-          OVERALL_TEXT="No changes"
-          HAS_CHANGES=false
-          HAS_DESTROYS=false
-          TABLE=""
-          DETAILS=""
+          python3 << 'PYEOF'
+          import json, re, os
 
-          # Write plan parser once. Strips ANSI codes + Terragrunt timestamp/level prefix,
-          # then splits the plan output into one <details> block per resource.
-          cat > /tmp/parse_plan.py << 'PYEOF'
-          import sys, re
-          with open(sys.argv[1]) as f:
-              raw = f.read()
-          # Strip ANSI colour codes
-          clean = re.sub(r'\x1b\[[0-9;]*m', '', raw)
-          # Strip Terragrunt prefix: "HH:MM:SS.mmm LEVEL word: "
-          clean = re.sub(r'^\d{2}:\d{2}:\d{2}\.\d+\s+\S+\s+\S+\s+', '', clean, flags=re.MULTILINE)
-          lines = clean.split('\n')
-          blocks = []
-          cur_addr = cur_action = None
-          cur_lines = []
-          for line in lines:
-              m = re.match(r'\s+#\s+(\S+)\s+will be (\w+)', line)
-              if m:
-                  if cur_addr:
-                      blocks.append((cur_addr, cur_action, list(cur_lines)))
-                  cur_addr = m.group(1)
-                  w = m.group(2)
-                  cur_action = '+' if w == 'created' else '~' if w in ('updated','modified') else '-' if w == 'destroyed' else '±' if w == 'replaced' else '?'
-                  cur_lines = [line]
-              elif cur_addr is not None:
-                  if re.match(r'\s*(Plan:|No changes\.)', line):
-                      break
-                  cur_lines.append(line)
-          if cur_addr:
-              blocks.append((cur_addr, cur_action, list(cur_lines)))
-          for addr, action, blines in blocks:
-              block = '\n'.join(blines).strip()
-              print(f'<details>')
-              print(f'<summary><code>{action} {addr}</code></summary>')
-              print()
-              print('```hcl')
-              print(block)
-              print('```')
-              print()
-              print('</details>')
-              print()
+          modules    = json.loads(os.environ['MODULES'])
+          env        = os.environ['ENV_NAME']
+          region     = os.environ['REGION']
+          action     = os.environ['ACTION']
+          sha        = os.environ['GH_SHA'][:7]
+          actor      = os.environ['GH_ACTOR']
+          run_number = os.environ['GH_RUN_NUMBER']
+          run_url    = os.environ['GH_RUN_URL']
+          repo_url   = os.environ['GH_REPO_URL']
+          full_sha   = os.environ['GH_SHA']
+          plans_dir  = '/tmp/plans'
+          gh_output  = os.environ.get('GITHUB_OUTPUT', '')
+          gh_summary = os.environ.get('GITHUB_STEP_SUMMARY', '')
+
+          def strip_noise(text):
+              text = re.sub(r'\x1b\[[0-9;]*m', '', text)
+              text = re.sub(r'^\d{2}:\d{2}:\d{2}\.\d+\s+\S+\s+\S+\s+', '', text, flags=re.MULTILINE)
+              return text
+
+          def parse_blocks(text):
+              lines = text.split('\n')
+              blocks, cur_addr, cur_action, cur_lines = [], None, None, []
+              for line in lines:
+                  m = re.match(r'\s+#\s+(\S+)\s+will be (\w+)', line)
+                  if m:
+                      if cur_addr:
+                          blocks.append((cur_addr, cur_action, '\n'.join(cur_lines)))
+                      cur_addr = m.group(1)
+                      w = m.group(2)
+                      cur_action = ('+' if w == 'created' else
+                                    '~' if w in ('updated', 'modified') else
+                                    '-' if w == 'destroyed' else
+                                    '±' if w == 'replaced' else '?')
+                      cur_lines = [line]
+                  elif cur_addr is not None:
+                      if re.match(r'\s*(Plan:|No changes\.)', line):
+                          break
+                      cur_lines.append(line)
+              if cur_addr:
+                  blocks.append((cur_addr, cur_action, '\n'.join(cur_lines)))
+              return blocks
+
+          overall_icon, overall_text = '✅', 'No changes'
+          has_changes = has_destroys = False
+          table_rows, module_details = [], []
+
+          for mod in modules:
+              meta_path = f'{plans_dir}/plan-{env}-{mod}/meta.txt'
+              out_path  = f'{plans_dir}/plan-{env}-{mod}/output.txt'
+
+              if os.path.exists(meta_path):
+                  parts  = open(meta_path).read().strip().split('\n')
+                  status = parts[0] if parts else 'error'
+                  adds   = parts[1] if len(parts) > 1 else '0'
+                  chgs   = parts[2] if len(parts) > 2 else '0'
+                  dest   = parts[3] if len(parts) > 3 else '0'
+
+                  if status == 'error':
+                      icon = '❌ Error'
+                      overall_icon, overall_text = '❌', 'Plan failed'
+                  elif status == 'no-changes':
+                      icon = '✅ No changes'
+                  elif status == 'destroys':
+                      icon = '⚠️ Destroys'
+                      has_changes = has_destroys = True
+                      if overall_text != 'Plan failed':
+                          overall_icon, overall_text = '⚠️', 'Destroys planned'
+                  else:
+                      icon = '📋 Changes'
+                      has_changes = True
+                      if overall_text == 'No changes':
+                          overall_icon, overall_text = '📋', 'Changes pending'
+              else:
+                  icon, adds, chgs, dest = '⏭️ Skipped', '-', '-', '-'
+
+              table_rows.append(f'| `{mod}` | {icon} | {adds} | {chgs} | {dest} |')
+
+              if os.path.exists(out_path):
+                  blocks = parse_blocks(strip_noise(open(out_path).read()))
+                  resource_html = ''
+                  for addr, act, block_text in blocks:
+                      resource_html += (
+                          '<details>\n'
+                          f'<summary><code>{act} {addr}</code></summary>\n\n'
+                          '```hcl\n'
+                          f'{block_text.strip()}\n'
+                          '```\n\n'
+                          '</details>\n\n'
+                      )
+                  module_details.append(
+                      '<details>\n'
+                      f'<summary><b>{mod}</b> &nbsp;&mdash;&nbsp; {icon} &nbsp;'
+                      f'(+{adds} ~{chgs} -{dest})</summary>\n\n'
+                      f'{resource_html}'
+                      '</details>\n\n'
+                  )
+
+          warn = ('\n> ⚠️ **This plan destroys resources. Review carefully before approving.**\n'
+                  if has_destroys else '')
+
+          if action == 'apply' and has_changes:
+              next_step = f'\n---\n**Next:** approve this run in the [GitHub Actions UI]({run_url}) to apply.'
+          elif not has_changes:
+              next_step = '\n_No infrastructure changes — apply will be skipped._'
+          else:
+              next_step = ''
+
+          summary = '\n'.join([
+              f'## {overall_icon} Terraform {action.capitalize()} — `{env}` (`{region}`)\n',
+              f'**Overall:** {overall_icon} {overall_text}\n',
+              f'Commit: [`{sha}`]({repo_url}/commit/{full_sha}) | @{actor} | [Run #{run_number}]({run_url})\n',
+              '| Module | Status | Add | Change | Destroy |',
+              '|--------|--------|-----|--------|---------|',
+              '\n'.join(table_rows),
+              warn,
+              '\n### Module Details\n',
+              ''.join(module_details),
+              next_step,
+          ])
+
+          with open('/tmp/summary.md', 'w') as f:
+              f.write(summary)
+
+          if gh_output:
+              with open(gh_output, 'a') as f:
+                  f.write(f'has_changes={"true" if has_changes else "false"}\n')
+                  f.write(f'has_destroys={"true" if has_destroys else "false"}\n')
+
+          if gh_summary:
+              with open(gh_summary, 'a') as f:
+                  f.write(summary)
           PYEOF
-
-          for MOD in $(echo "$MODULES" | jq -r '.[]'); do
-            META="/tmp/plans/plan-${{ inputs.environment }}-${MOD}/meta.txt"
-            OUT="/tmp/plans/plan-${{ inputs.environment }}-${MOD}/output.txt"
-
-            if [ -f "$META" ]; then
-              STATUS=$(sed -n '1p' "$META")
-              ADDS=$(sed -n '2p' "$META")
-              CHGS=$(sed -n '3p' "$META")
-              DEST=$(sed -n '4p' "$META")
-
-              case "$STATUS" in
-                error)
-                  ICON="❌ Error"
-                  OVERALL_ICON="❌"; OVERALL_TEXT="Plan failed" ;;
-                no-changes)
-                  ICON="✅ No changes" ;;
-                destroys)
-                  ICON="⚠️ Destroys"
-                  HAS_CHANGES=true; HAS_DESTROYS=true
-                  if [ "$OVERALL_TEXT" != "Plan failed" ]; then
-                    OVERALL_ICON="⚠️"; OVERALL_TEXT="Destroys planned"
-                  fi ;;
-                changes)
-                  ICON="📋 Changes"
-                  HAS_CHANGES=true
-                  if [ "$OVERALL_TEXT" = "No changes" ]; then
-                    OVERALL_ICON="📋"; OVERALL_TEXT="Changes pending"
-                  fi ;;
-              esac
-            else
-              ICON="⏭️ Skipped"; ADDS="-"; CHGS="-"; DEST="-"
-            fi
-
-            TABLE+="| \`${MOD}\` | ${ICON} | ${ADDS} | ${CHGS} | ${DEST} |"$'\n'
-
-            if [ -f "$OUT" ]; then
-              RESOURCE_DETAILS=$(python3 /tmp/parse_plan.py "$OUT")
-              DETAILS+="<details>"$'\n'
-              DETAILS+="<summary><b>${MOD}</b> &nbsp;—&nbsp; ${ICON} &nbsp;(+${ADDS} ~${CHGS} -${DEST})</summary>"$'\n\n'
-              DETAILS+="${RESOURCE_DETAILS}"$'\n'
-              DETAILS+="</details>"$'\n\n'
-            fi
-          done
-
-          WARN=""
-          [ "$HAS_DESTROYS" = "true" ] && WARN=$'\n'"> ⚠️ **This plan destroys resources. Review carefully before approving the apply.**"$'\n'
-
-          NEXT_STEP=""
-          if [ "${{ inputs.action }}" = "apply" ] && [ "$HAS_CHANGES" = "true" ]; then
-            NEXT_STEP=$'\n'"---"$'\n'"**Next:** approve this run in the [GitHub Actions UI](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) to apply."
-          elif [ "$HAS_CHANGES" = "false" ]; then
-            NEXT_STEP=$'\n'"_No infrastructure changes — apply will be skipped._"
-          fi
-
-          SHA="${GITHUB_SHA::7}"
-          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          ACTION_TITLE=$(echo "${{ inputs.action }}" | sed 's/./\U&/')
-
-          {
-            printf "## %s Terraform %s — \`%s\` (\`%s\`)\n\n" "$OVERALL_ICON" "$ACTION_TITLE" "${{ inputs.environment }}" "${{ inputs.region }}"
-            printf "**Overall:** %s %s\n\n" "$OVERALL_ICON" "$OVERALL_TEXT"
-            printf "Commit: [\`%s\`](%s/commit/%s) | @%s | [Run #%s](%s)\n\n" \
-              "$SHA" "${{ github.server_url }}/${{ github.repository }}" "${{ github.sha }}" \
-              "${{ github.actor }}" "${{ github.run_number }}" "$RUN_URL"
-            printf "| Module | Status | Add | Change | Destroy |\n"
-            printf "|--------|--------|-----|--------|---------|\n"
-            printf "%s" "$TABLE"
-            printf "%s\n\n" "$WARN"
-            printf "### Module Details\n\n%s" "$DETAILS"
-            printf "%s\n" "$NEXT_STEP"
-          } > /tmp/summary.md
-
-          echo "has_changes=$HAS_CHANGES" >> "$GITHUB_OUTPUT"
-          echo "has_destroys=$HAS_DESTROYS" >> "$GITHUB_OUTPUT"
-          cat /tmp/summary.md >> "$GITHUB_STEP_SUMMARY"
 
       # PR comment — only on PR events. Sticky marker is per-env so multi-env PRs don't overwrite each other.
       - name: "Post or update PR comment"
