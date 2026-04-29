@@ -9,7 +9,7 @@ locals {
   sql_tier          = "db-g1-small"
   sql_ha_enabled    = false   # no HA in sandbox — saves ~$70/mo
   sql_pitr_enabled  = false
-  sql_backup_days   = 7
+  sql_backup_days   = 8
 
   # Feature flags
   use_gke = false  # Phase 5
