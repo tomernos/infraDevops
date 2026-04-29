@@ -187,6 +187,48 @@ jobs:
           TABLE=""
           DETAILS=""
 
+          # Write plan parser once. Strips ANSI codes + Terragrunt timestamp/level prefix,
+          # then splits the plan output into one <details> block per resource.
+          cat > /tmp/parse_plan.py << 'PYEOF'
+          import sys, re
+          with open(sys.argv[1]) as f:
+              raw = f.read()
+          # Strip ANSI colour codes
+          clean = re.sub(r'\x1b\[[0-9;]*m', '', raw)
+          # Strip Terragrunt prefix: "HH:MM:SS.mmm LEVEL word: "
+          clean = re.sub(r'^\d{2}:\d{2}:\d{2}\.\d+\s+\S+\s+\S+\s+', '', clean, flags=re.MULTILINE)
+          lines = clean.split('\n')
+          blocks = []
+          cur_addr = cur_action = None
+          cur_lines = []
+          for line in lines:
+              m = re.match(r'\s+#\s+(\S+)\s+will be (\w+)', line)
+              if m:
+                  if cur_addr:
+                      blocks.append((cur_addr, cur_action, list(cur_lines)))
+                  cur_addr = m.group(1)
+                  w = m.group(2)
+                  cur_action = '+' if w == 'created' else '~' if w in ('updated','modified') else '-' if w == 'destroyed' else '±' if w == 'replaced' else '?'
+                  cur_lines = [line]
+              elif cur_addr is not None:
+                  if re.match(r'\s*(Plan:|No changes\.)', line):
+                      break
+                  cur_lines.append(line)
+          if cur_addr:
+              blocks.append((cur_addr, cur_action, list(cur_lines)))
+          for addr, action, blines in blocks:
+              block = '\n'.join(blines).strip()
+              print(f'<details>')
+              print(f'<summary><code>{action} {addr}</code></summary>')
+              print()
+              print('```hcl')
+              print(block)
+              print('```')
+              print()
+              print('</details>')
+              print()
+          PYEOF
+
           for MOD in $(echo "$MODULES" | jq -r '.[]'); do
             META="/tmp/plans/plan-${{ inputs.environment }}-${MOD}/meta.txt"
             OUT="/tmp/plans/plan-${{ inputs.environment }}-${MOD}/output.txt"
@@ -223,32 +265,10 @@ jobs:
             TABLE+="| \`${MOD}\` | ${ICON} | ${ADDS} | ${CHGS} | ${DEST} |"$'\n'
 
             if [ -f "$OUT" ]; then
-              # Per-resource action table — strip Terragrunt timestamp prefix when matching.
-              RESOURCE_TABLE=""
-              while IFS= read -r line; do
-                if echo "$line" | grep -qE "# .* will be (created|updated|destroyed|replaced|modified)|must be replaced"; then
-                  ADDR=$(echo "$line" | grep -oP '(?<=# )[\w.\[\]"_-]+')
-                  if   echo "$line" | grep -q "will be created";                       then ACT="\`+\` create"
-                  elif echo "$line" | grep -qE "will be (updated|modified)";           then ACT="\`~\` update"
-                  elif echo "$line" | grep -q "will be destroyed";                     then ACT="\`-\` destroy"
-                  elif echo "$line" | grep -qE "(must be replaced|will be replaced)";  then ACT="\`±\` replace"
-                  else ACT="\`?\` change"; fi
-                  RESOURCE_TABLE+="| ${ACT} | \`${ADDR}\` |"$'\n'
-                fi
-              done < "$OUT"
-
-              FULL=$(tail -c 5000 "$OUT")
-
+              RESOURCE_DETAILS=$(python3 /tmp/parse_plan.py "$OUT")
               DETAILS+="<details>"$'\n'
               DETAILS+="<summary><b>${MOD}</b> &nbsp;—&nbsp; ${ICON} &nbsp;(+${ADDS} ~${CHGS} -${DEST})</summary>"$'\n\n'
-              if [ -n "$RESOURCE_TABLE" ]; then
-                DETAILS+="| Action | Resource |"$'\n'
-                DETAILS+="|--------|----------|"$'\n'
-                DETAILS+="${RESOURCE_TABLE}"$'\n'
-              fi
-              DETAILS+="<details><summary>Full plan output</summary>"$'\n\n'
-              DETAILS+='```hcl'$'\n'"${FULL}"$'\n''```'$'\n'
-              DETAILS+="</details>"$'\n'
+              DETAILS+="${RESOURCE_DETAILS}"$'\n'
               DETAILS+="</details>"$'\n\n'
             fi
           done
