@@ -212,10 +212,11 @@ jobs:
               return text
 
           def parse_blocks(text):
+              # Use re.search so leading-space count after prefix-strip doesn't matter.
               lines = text.split('\n')
               blocks, cur_addr, cur_action, cur_lines = [], None, None, []
               for line in lines:
-                  m = re.match(r'\s+#\s+(\S+)\s+will be (\w+)', line)
+                  m = re.search(r'#\s+(\S+)\s+will be (\w+)', line)
                   if m:
                       if cur_addr:
                           blocks.append((cur_addr, cur_action, '\n'.join(cur_lines)))
@@ -227,7 +228,7 @@ jobs:
                                     '±' if w == 'replaced' else '?')
                       cur_lines = [line]
                   elif cur_addr is not None:
-                      if re.match(r'\s*(Plan:|No changes\.)', line):
+                      if 'Plan:' in line or 'No changes.' in line:
                           break
                       cur_lines.append(line)
               if cur_addr:
@@ -270,7 +271,8 @@ jobs:
               table_rows.append(f'| `{mod}` | {icon} | {adds} | {chgs} | {dest} |')
 
               if os.path.exists(out_path):
-                  blocks = parse_blocks(strip_noise(open(out_path).read()))
+                  clean_text = strip_noise(open(out_path).read())
+                  blocks = parse_blocks(clean_text)
                   resource_html = ''
                   for addr, act, block_text in blocks:
                       resource_html += (
@@ -281,6 +283,10 @@ jobs:
                           '```\n\n'
                           '</details>\n\n'
                       )
+                  # Fallback: if block parsing found nothing, show stripped raw output
+                  if not resource_html:
+                      tail = '\n'.join(clean_text.strip().splitlines()[-80:])
+                      resource_html = f'```hcl\n{tail}\n```\n\n'
                   module_details.append(
                       '<details>\n'
                       f'<summary><b>{mod}</b> &nbsp;&mdash;&nbsp; {icon} &nbsp;'
