@@ -70,20 +70,182 @@ jobs:
 
       - name: "Parse drift summary"
         id: summary
+        env:
+          ENV_NAME: ${{ needs.setup.outputs.env_name }}
+          RUN_URL:  ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          PLAN=$(cat /tmp/plan.txt)
+          python3 << 'PYEOF'
+          import re, os
+          from datetime import datetime, timezone
 
-          ADDS=$(echo "$PLAN"    | grep -oP '\d+(?= to add)'    | paste -sd+ | bc 2>/dev/null || echo 0)
-          CHANGES=$(echo "$PLAN" | grep -oP '\d+(?= to change)' | paste -sd+ | bc 2>/dev/null || echo 0)
-          DESTROYS=$(echo "$PLAN"| grep -oP '\d+(?= to destroy)'| paste -sd+ | bc 2>/dev/null || echo 0)
+          env_name = os.environ.get('ENV_NAME', 'unknown')
+          run_url  = os.environ.get('RUN_URL', '')
 
-          HAS_DRIFT=false
-          [ "$((ADDS + CHANGES + DESTROYS))" -gt 0 ] && HAS_DRIFT=true
+          try:
+            plan_text = open('/tmp/plan.txt').read()
+          except Exception:
+            plan_text = ''
 
-          echo "adds=$ADDS"           >> "$GITHUB_OUTPUT"
-          echo "changes=$CHANGES"     >> "$GITHUB_OUTPUT"
-          echo "destroys=$DESTROYS"   >> "$GITHUB_OUTPUT"
-          echo "has_drift=$HAS_DRIFT" >> "$GITHUB_OUTPUT"
+          plan_text = re.sub(r'\x1b\[[0-9;]*m', '', plan_text)
+
+          # Split interleaved run --all output by module using Terragrunt log prefix:
+          # HH:MM:SS.NNN  LEVEL  module-name  rest-of-line
+          LINE_RE = re.compile(r'^\d{2}:\d{2}:\d{2}\.\d+\s+\S+\s+(\S+)\s+(.*)')
+
+          module_lines = {}
+          module_order = []
+
+          for line in plan_text.split('\n'):
+            m = LINE_RE.match(line)
+            if m:
+              mod, content = m.group(1), m.group(2)
+              if mod not in module_lines:
+                module_lines[mod] = []
+                module_order.append(mod)
+              module_lines[mod].append(content)
+
+          def parse_blocks(lines_list):
+            blocks, cur_addr, cur_action, cur_lines = [], None, None, []
+            for line in lines_list:
+              m = re.search(r'#\s+(\S+)\s+will be (\w+)', line)
+              if m:
+                if cur_addr:
+                  blocks.append((cur_addr, cur_action, '\n'.join(cur_lines)))
+                cur_addr = m.group(1)
+                w = m.group(2)
+                cur_action = ('+' if w == 'created' else
+                              '~' if w in ('updated', 'modified') else
+                              '-' if w == 'destroyed' else
+                              '±' if w == 'replaced' else '?')
+                cur_lines = [line]
+              elif cur_addr is not None:
+                if 'Plan:' in line or 'No changes.' in line:
+                  break
+                cur_lines.append(line)
+            if cur_addr:
+              blocks.append((cur_addr, cur_action, '\n'.join(cur_lines)))
+            return blocks
+
+          def get_counts(lines_list):
+            for line in reversed(lines_list):
+              if re.search(r'Plan: [0-9]', line):
+                adds = int(m.group(1)) if (m := re.search(r'(\d+) to add', line)) else 0
+                chgs = int(m.group(1)) if (m := re.search(r'(\d+) to change', line)) else 0
+                dest = int(m.group(1)) if (m := re.search(r'(\d+) to destroy', line)) else 0
+                return adds, chgs, dest, ('destroys' if dest > 0 else 'changes')
+              if 'No changes.' in line:
+                return 0, 0, 0, 'no-changes'
+            return 0, 0, 0, 'no-changes'
+
+          def make_resource_html(lines_list):
+            blocks = parse_blocks(lines_list)
+            if blocks:
+              html = ''
+              for addr, act, block_text in blocks:
+                html += (
+                  '<details>\n'
+                  f'<summary><code>{act} {addr}</code></summary>\n\n'
+                  '```hcl\n'
+                  f'{block_text.strip()}\n'
+                  '```\n\n'
+                  '</details>\n\n'
+                )
+              return html
+            tail = '\n'.join('\n'.join(lines_list).strip().splitlines()[-40:])
+            return f'```hcl\n{tail}\n```\n\n'
+
+          # Only keep modules that have real Terraform plan output
+          tf_modules = [
+            mod for mod in module_order
+            if any(re.search(r'Plan: [0-9]|No changes\.', l) for l in module_lines[mod])
+          ]
+
+          total_adds = total_chgs = total_dest = 0
+          has_drift = False
+          table_rows = []
+          module_details_html = []
+
+          for mod in tf_modules:
+            lines = module_lines[mod]
+            adds, chgs, dest, status = get_counts(lines)
+            total_adds += adds
+            total_chgs += chgs
+            total_dest += dest
+            if status in ('changes', 'destroys'):
+              has_drift = True
+
+            icon = ('✅ No changes' if status == 'no-changes' else
+                    '⚠️ Destroys'   if status == 'destroys'   else '📋 Changes')
+            table_rows.append(f'| `{mod}` | {icon} | {adds} | {chgs} | {dest} |')
+
+            if status in ('changes', 'destroys'):
+              resource_html = make_resource_html(lines)
+              module_details_html.append(
+                '<details>\n'
+                f'<summary><b>{mod}</b> &mdash; {icon} (+{adds} ~{chgs} -{dest})</summary>\n\n'
+                + resource_html
+                + '</details>\n\n'
+              )
+
+          # Fallback: no Terragrunt prefix found — parse the flat output as one block
+          if not tf_modules and plan_text.strip():
+            flat = plan_text.split('\n')
+            adds, chgs, dest, status = get_counts(flat)
+            total_adds, total_chgs, total_dest = adds, chgs, dest
+            has_drift = status in ('changes', 'destroys')
+            icon = ('⚠️ Destroys' if status == 'destroys' else
+                    '📋 Changes'  if has_drift             else '✅ No changes')
+            if has_drift:
+              resource_html = make_resource_html(flat)
+              module_details_html.append(
+                '<details>\n'
+                f'<summary><b>(all modules)</b> &mdash; {icon} (+{adds} ~{chgs} -{dest})</summary>\n\n'
+                + resource_html
+                + '</details>\n\n'
+              )
+
+          # ── GITHUB_OUTPUT ────────────────────────────────────────────────────
+          gh_output = os.environ.get('GITHUB_OUTPUT', '')
+          if gh_output:
+            with open(gh_output, 'a') as f:
+              f.write(f'adds={total_adds}\n')
+              f.write(f'changes={total_chgs}\n')
+              f.write(f'destroys={total_dest}\n')
+              f.write(f'has_drift={"true" if has_drift else "false"}\n')
+
+          # ── Build issue body ─────────────────────────────────────────────────
+          now = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+
+          module_table = '\n'.join([
+            '| Module | Status | Add | Change | Destroy |',
+            '|--------|--------|-----|--------|---------|',
+            *table_rows,
+          ]) if table_rows else '_No module breakdown available._'
+
+          details_section = (
+            '\n### Module Details\n\n' + ''.join(module_details_html)
+          ) if module_details_html else ''
+
+          body = (
+            f'## Infrastructure Drift Detected — `{env_name}`\n\n'
+            f'| Metric | Count |\n'
+            f'|---|---|\n'
+            f'| Resources to add | `{total_adds}` |\n'
+            f'| Resources to change | `{total_chgs}` |\n'
+            f'| Resources to destroy | `{total_dest}` |\n'
+            f'| Detected | {now} |\n'
+            f'| Workflow run | [View logs]({run_url}) |\n'
+            f'\n### Module Summary\n\n'
+            f'{module_table}'
+            f'{details_section}\n\n'
+            f'### Resolution\n\n'
+            f'Open a PR with the fix, or run `terragrunt run --all apply` in '
+            f'`regions/me-west1/{env_name}`.\n'
+          )
+
+          with open('/tmp/drift-details.md', 'w') as f:
+            f.write(body)
+          PYEOF
 
       - name: "Open or update drift issue"
         if: steps.summary.outputs.has_drift == 'true'
@@ -104,30 +266,10 @@ jobs:
             const runUrl   = process.env.RUN_URL;
             const label    = `infrastructure-drift-${envName}`;
 
-            // Read plan directly from file — avoids backtick/injection issues
-            let plan = '';
-            try { plan = fs.readFileSync('/tmp/plan.txt', 'utf8').slice(-60000); } catch (_) {}
-
             const title = `🚨 Infrastructure Drift — ${envName} (+${adds} ~${changes} -${destroys})`;
-            const body = [
-              `## Infrastructure Drift Detected — \`${envName}\``,
-              ``,
-              `| Metric | Count |`,
-              `|---|---|`,
-              `| Resources to add | \`${adds}\` |`,
-              `| Resources to change | \`${changes}\` |`,
-              `| Resources to destroy | \`${destroys}\` |`,
-              `| Detected | ${new Date().toISOString()} |`,
-              `| Workflow run | [View logs](${runUrl}) |`,
-              ``,
-              `## Plan output`,
-              '```hcl',
-              plan,
-              '```',
-              ``,
-              `## Resolution`,
-              `Open a PR with the fix, or run \`terragrunt run --all apply\` in \`regions/me-west1/${envName}\`.`,
-            ].join('\n');
+
+            let body = '';
+            try { body = fs.readFileSync('/tmp/drift-details.md', 'utf8'); } catch (_) {}
 
             try {
               await github.rest.issues.createLabel({
@@ -144,9 +286,10 @@ jobs:
 
             if (existing.data.length > 0) {
               const issue = existing.data[0];
+              // Keep body current with latest plan; comment preserves history.
               await github.rest.issues.update({
                 owner: context.repo.owner, repo: context.repo.repo,
-                issue_number: issue.number, title,
+                issue_number: issue.number, title, body,
               });
               await github.rest.issues.createComment({
                 owner: context.repo.owner, repo: context.repo.repo,
@@ -212,5 +355,9 @@ jobs:
               echo "| **To destroy** | \`${DESTROYS}\` |"
             else
               echo "| **Result** | ✅ No drift |"
+            fi
+            if [ -f /tmp/drift-details.md ]; then
+              echo ""
+              cat /tmp/drift-details.md
             fi
           } >> "$GITHUB_STEP_SUMMARY"
