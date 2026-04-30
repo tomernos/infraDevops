@@ -58,7 +58,7 @@ jobs:
         run: |
           set -o pipefail
           EXIT=0
-          terragrunt run --all plan -no-color 2>&1 | tee /tmp/plan.txt || EXIT=$?
+          terragrunt run --all plan -- -no-color 2>&1 | tee /tmp/plan.txt || EXIT=$?
           echo "exit_code=$EXIT" >> "$GITHUB_OUTPUT"
 
       - name: Parse drift summary
