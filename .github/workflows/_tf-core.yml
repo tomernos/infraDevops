@@ -393,7 +393,7 @@ jobs:
         continue-on-error: true
         run: |
           set -o pipefail
-          terragrunt run --all apply -auto-approve 2>&1 \
+          terragrunt run --all apply -- -auto-approve 2>&1 \
             | tee /tmp/apply-output.txt
 
       - name: "Write apply summary"
