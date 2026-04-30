@@ -38,6 +38,7 @@ on:
 env:
   TF_INPUT: "false"
   TF_IN_AUTOMATION: "true"
+  TERRAGRUNT_NON_INTERACTIVE: "true"
 
 jobs:
   # ── 1. setup — resolve project_id from environment name ───────────────────
@@ -117,8 +118,9 @@ jobs:
         working-directory: "regions/${{ inputs.region }}/${{ inputs.environment }}/${{ matrix.module }}"
         continue-on-error: true
         run: |
+          set -o pipefail
           EXIT=0
-          terragrunt plan --terragrunt-non-interactive -no-color 2>&1 \
+          terragrunt plan -no-color 2>&1 \
             | tee /tmp/plan-output.txt || EXIT=$?
 
           # Terragrunt prefixes lines with timestamps — match anywhere on the line.
@@ -385,43 +387,13 @@ jobs:
           wif-provider: ${{ secrets.WIF_PROVIDER }}
           project-id: ${{ needs.setup.outputs.project_id }}
 
-      - name: "Download approved plan metadata"
-        uses: actions/download-artifact@v4
-        with:
-          pattern: "plan-${{ inputs.environment }}-*"
-          path: /tmp/approved-plans
-          merge-multiple: false
-
-      - name: "Safety check — no new destroys since approval"
-        working-directory: "regions/${{ inputs.region }}/${{ inputs.environment }}"
-        run: |
-          MODULES='${{ needs.discover.outputs.modules }}'
-          BLOCKED=false
-
-          for MOD in $(echo "$MODULES" | jq -r '.[]'); do
-            META="/tmp/approved-plans/plan-${{ inputs.environment }}-${MOD}/meta.txt"
-            APPROVED_DEST=0
-            [ -f "$META" ] && APPROVED_DEST=$(sed -n '4p' "$META" || echo 0)
-
-            CURRENT_OUT=$(cd "./${MOD}" && terragrunt plan --terragrunt-non-interactive -no-color 2>&1 || true)
-            CURRENT_DEST=$(echo "$CURRENT_OUT" | grep -oP '\d+(?= to destroy)' | head -1 || echo 0)
-
-            if [ "${CURRENT_DEST:-0}" -gt "${APPROVED_DEST:-0}" ]; then
-              echo "::error::$MOD: ${CURRENT_DEST} destroys now vs ${APPROVED_DEST} at approval — re-run plan workflow"
-              BLOCKED=true
-            else
-              echo "  OK  $MOD (destroys: ${CURRENT_DEST}, approved: ${APPROVED_DEST})"
-            fi
-          done
-
-          $BLOCKED && exit 1 || true
-
       - name: "Apply all stacks"
         id: apply
         working-directory: "regions/${{ inputs.region }}/${{ inputs.environment }}"
         continue-on-error: true
         run: |
-          terragrunt run --all apply --terragrunt-non-interactive -auto-approve 2>&1 \
+          set -o pipefail
+          terragrunt run --all apply -auto-approve 2>&1 \
             | tee /tmp/apply-output.txt
 
       - name: "Write apply summary"

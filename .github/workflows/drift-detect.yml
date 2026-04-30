@@ -17,7 +17,7 @@ jobs:
     env:
       PROJECT_ID: cryptoshare-e5172
       TF_VERSION: "1.9.8"
-      TG_VERSION: "0.67.16"
+      TG_VERSION: "1.0.0"
       DRIFT_LABEL: "infrastructure-drift"
 
     steps:
@@ -46,34 +46,38 @@ jobs:
         with:
           project_id: ${{ env.PROJECT_ID }}
 
-      # Plan exits 0 = no changes, 2 = changes detected, 1 = error
+      # Run plan across all modules. No -detailed-exitcode — that causes exit 2 per
+      # module which Terragrunt treats as a dependency failure, cascading to every
+      # downstream module. Instead: exit 0 = plans ran (check output for drift),
+      # exit 1 = actual plan error.
       - name: Run plan
         id: plan
         working-directory: regions/me-west1/sandbox
+        env:
+          TERRAGRUNT_NON_INTERACTIVE: "true"
         run: |
-          set +e
-          terragrunt run-all plan \
-            --terragrunt-non-interactive \
-            -detailed-exitcode \
-            -no-color 2>&1 | tee /tmp/plan.txt
-          echo "exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
-          set -e
+          set -o pipefail
+          EXIT=0
+          terragrunt run --all plan -no-color 2>&1 | tee /tmp/plan.txt || EXIT=$?
+          echo "exit_code=$EXIT" >> "$GITHUB_OUTPUT"
 
       - name: Parse drift summary
         id: summary
         run: |
           PLAN=$(cat /tmp/plan.txt)
 
-          # Extract resource change counts from plan output
           ADDS=$(echo "$PLAN"    | grep -oP '\d+(?= to add)'    | paste -sd+ | bc 2>/dev/null || echo 0)
           CHANGES=$(echo "$PLAN" | grep -oP '\d+(?= to change)' | paste -sd+ | bc 2>/dev/null || echo 0)
           DESTROYS=$(echo "$PLAN"| grep -oP '\d+(?= to destroy)'| paste -sd+ | bc 2>/dev/null || echo 0)
 
-          echo "adds=$ADDS"       >> "$GITHUB_OUTPUT"
-          echo "changes=$CHANGES" >> "$GITHUB_OUTPUT"
-          echo "destroys=$DESTROYS" >> "$GITHUB_OUTPUT"
+          HAS_DRIFT=false
+          [ "$((ADDS + CHANGES + DESTROYS))" -gt 0 ] && HAS_DRIFT=true
 
-          # Truncate plan for issue body (GitHub limit)
+          echo "adds=$ADDS"           >> "$GITHUB_OUTPUT"
+          echo "changes=$CHANGES"     >> "$GITHUB_OUTPUT"
+          echo "destroys=$DESTROYS"   >> "$GITHUB_OUTPUT"
+          echo "has_drift=$HAS_DRIFT" >> "$GITHUB_OUTPUT"
+
           TRUNCATED=$(echo "$PLAN" | tail -c 60000)
           echo "plan_body<<EOF" >> "$GITHUB_OUTPUT"
           echo "$TRUNCATED"     >> "$GITHUB_OUTPUT"
@@ -81,7 +85,7 @@ jobs:
 
       # ── Drift detected — open or update issue ────────────────────────────────
       - name: Open or update drift issue
-        if: steps.plan.outputs.exit_code == '2'
+        if: steps.summary.outputs.has_drift == 'true'
         uses: actions/github-script@v7
         with:
           script: |
@@ -163,7 +167,7 @@ jobs:
 
       # ── No drift — close any open drift issue ────────────────────────────────
       - name: Close drift issue if resolved
-        if: steps.plan.outputs.exit_code == '0'
+        if: steps.plan.outputs.exit_code == '0' && steps.summary.outputs.has_drift == 'false'
         uses: actions/github-script@v7
         with:
           script: |
@@ -202,14 +206,15 @@ jobs:
             echo "## 🔍 Drift Detection — Sandbox"
             echo "| | |"
             echo "|---|---|"
-            if [ "$EXIT" = "0" ]; then
-              echo "| **Result** | ✅ No drift |"
-            elif [ "$EXIT" = "2" ]; then
+            DRIFT="${{ steps.summary.outputs.has_drift }}"
+            if [ "$EXIT" = "1" ]; then
+              echo "| **Result** | ❌ Plan error |"
+            elif [ "$DRIFT" = "true" ]; then
               echo "| **Result** | 🚨 Drift detected |"
               echo "| **To add** | \`$ADDS\` |"
               echo "| **To change** | \`$CHANGES\` |"
               echo "| **To destroy** | \`$DESTROYS\` |"
             else
-              echo "| **Result** | ❌ Plan error |"
+              echo "| **Result** | ✅ No drift |"
             fi
           } >> "$GITHUB_STEP_SUMMARY"

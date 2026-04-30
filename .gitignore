@@ -24,3 +24,7 @@ serviceAccountKey.json
 docs/
 terraformlogerror.txt
 *.log
+
+terraform-deploy.yaml
+terraform-plan-apply.yml
+workflowerror.md
