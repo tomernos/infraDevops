@@ -3,218 +3,361 @@ name: Drift Detection
 on:
   schedule:
     - cron: '0 5 * * *'   # 05:00 UTC daily — 8am Israel time
-  workflow_dispatch:       # manual trigger for on-demand checks
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Environment to check"
+        type: choice
+        options: [sandbox, staging, prod]
+        default: sandbox
+
+concurrency:
+  group: drift-${{ inputs.environment || 'sandbox' }}
+  cancel-in-progress: true
 
 jobs:
+  setup:
+    name: "Resolve project"
+    runs-on: ubuntu-latest
+    outputs:
+      project_id: ${{ steps.resolve.outputs.project_id }}
+      env_name:   ${{ steps.resolve.outputs.env_name }}
+    steps:
+      - name: "Resolve"
+        id: resolve
+        run: |
+          ENV="${{ inputs.environment || 'sandbox' }}"
+          case "$ENV" in
+            sandbox) PROJECT="cryptoshare-e5172" ;;
+            staging) PROJECT="sweptlock-staging" ;;
+            prod)    PROJECT="sweptlock-prod" ;;
+            *) echo "::error::Unknown env $ENV"; exit 1 ;;
+          esac
+          echo "project_id=$PROJECT" >> "$GITHUB_OUTPUT"
+          echo "env_name=$ENV"       >> "$GITHUB_OUTPUT"
+
   drift:
-    name: Detect sandbox drift
+    name: "Detect drift — ${{ needs.setup.outputs.env_name }}"
+    needs: [setup]
     runs-on: ubuntu-latest
     permissions:
       contents: read
       id-token: write
-      issues: write        # open / close drift issues
-
-    env:
-      PROJECT_ID: cryptoshare-e5172
-      TF_VERSION: "1.9.8"
-      TG_VERSION: "1.0.0"
-      DRIFT_LABEL: "infrastructure-drift"
+      issues: write
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Terraform
-        uses: hashicorp/setup-terraform@v3
+      - name: "Setup Terraform + Terragrunt + GCP auth"
+        uses: ./.github/actions/tf-setup
         with:
-          terraform_version: ${{ env.TF_VERSION }}
-          terraform_wrapper: false
+          service-account: ${{ secrets.SA_CI_TF_PLAN_EMAIL }}
+          wif-provider:    ${{ secrets.WIF_PROVIDER }}
+          project-id:      ${{ needs.setup.outputs.project_id }}
 
-      - name: Install Terragrunt
-        run: |
-          curl -sL "https://github.com/gruntwork-io/terragrunt/releases/download/v${{ env.TG_VERSION }}/terragrunt_linux_amd64" \
-            -o /usr/local/bin/terragrunt
-          chmod +x /usr/local/bin/terragrunt
-
-      - name: Authenticate to GCP
-        uses: google-github-actions/auth@v2
-        with:
-          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
-          service_account: ${{ secrets.SA_CI_TF_PLAN_EMAIL }}
-
-      - name: Set up gcloud
-        uses: google-github-actions/setup-gcloud@v2
-        with:
-          project_id: ${{ env.PROJECT_ID }}
-
-      # Run plan across all modules. No -detailed-exitcode — that causes exit 2 per
-      # module which Terragrunt treats as a dependency failure, cascading to every
-      # downstream module. Instead: exit 0 = plans ran (check output for drift),
-      # exit 1 = actual plan error.
-      - name: Run plan
+      - name: "Run plan"
         id: plan
-        working-directory: regions/me-west1/sandbox
+        working-directory: regions/me-west1/${{ needs.setup.outputs.env_name }}
         env:
           TERRAGRUNT_NON_INTERACTIVE: "true"
+          TF_INPUT: "false"
+          TF_IN_AUTOMATION: "true"
         run: |
           set -o pipefail
           EXIT=0
           terragrunt run --all plan -- -no-color 2>&1 | tee /tmp/plan.txt || EXIT=$?
           echo "exit_code=$EXIT" >> "$GITHUB_OUTPUT"
 
-      - name: Parse drift summary
+      - name: "Parse drift summary"
         id: summary
+        env:
+          ENV_NAME: ${{ needs.setup.outputs.env_name }}
+          RUN_URL:  ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          PLAN=$(cat /tmp/plan.txt)
+          python3 << 'PYEOF'
+          import re, os
+          from datetime import datetime, timezone
 
-          ADDS=$(echo "$PLAN"    | grep -oP '\d+(?= to add)'    | paste -sd+ | bc 2>/dev/null || echo 0)
-          CHANGES=$(echo "$PLAN" | grep -oP '\d+(?= to change)' | paste -sd+ | bc 2>/dev/null || echo 0)
-          DESTROYS=$(echo "$PLAN"| grep -oP '\d+(?= to destroy)'| paste -sd+ | bc 2>/dev/null || echo 0)
+          env_name = os.environ.get('ENV_NAME', 'unknown')
+          run_url  = os.environ.get('RUN_URL', '')
 
-          HAS_DRIFT=false
-          [ "$((ADDS + CHANGES + DESTROYS))" -gt 0 ] && HAS_DRIFT=true
+          try:
+            plan_text = open('/tmp/plan.txt').read()
+          except Exception:
+            plan_text = ''
 
-          echo "adds=$ADDS"           >> "$GITHUB_OUTPUT"
-          echo "changes=$CHANGES"     >> "$GITHUB_OUTPUT"
-          echo "destroys=$DESTROYS"   >> "$GITHUB_OUTPUT"
-          echo "has_drift=$HAS_DRIFT" >> "$GITHUB_OUTPUT"
+          plan_text = re.sub(r'\x1b\[[0-9;]*m', '', plan_text)
 
-          TRUNCATED=$(echo "$PLAN" | tail -c 60000)
-          echo "plan_body<<EOF" >> "$GITHUB_OUTPUT"
-          echo "$TRUNCATED"     >> "$GITHUB_OUTPUT"
-          echo "EOF"            >> "$GITHUB_OUTPUT"
+          # Split interleaved run --all output by module using Terragrunt log prefix:
+          # HH:MM:SS.NNN  LEVEL  module-name  rest-of-line
+          LINE_RE = re.compile(r'^\d{2}:\d{2}:\d{2}\.\d+\s+\S+\s+(\S+)\s+(.*)')
 
-      # ── Drift detected — open or update issue ────────────────────────────────
-      - name: Open or update drift issue
+          module_lines = {}
+          module_order = []
+
+          for line in plan_text.split('\n'):
+            m = LINE_RE.match(line)
+            if m:
+              mod, content = m.group(1), m.group(2)
+              if mod not in module_lines:
+                module_lines[mod] = []
+                module_order.append(mod)
+              module_lines[mod].append(content)
+
+          def parse_blocks(lines_list):
+            blocks, cur_addr, cur_action, cur_lines = [], None, None, []
+            for line in lines_list:
+              m = re.search(r'#\s+(\S+)\s+will be (\w+)', line)
+              if m:
+                if cur_addr:
+                  blocks.append((cur_addr, cur_action, '\n'.join(cur_lines)))
+                cur_addr = m.group(1)
+                w = m.group(2)
+                cur_action = ('+' if w == 'created' else
+                              '~' if w in ('updated', 'modified') else
+                              '-' if w == 'destroyed' else
+                              '±' if w == 'replaced' else '?')
+                cur_lines = [line]
+              elif cur_addr is not None:
+                if 'Plan:' in line or 'No changes.' in line:
+                  break
+                cur_lines.append(line)
+            if cur_addr:
+              blocks.append((cur_addr, cur_action, '\n'.join(cur_lines)))
+            return blocks
+
+          def get_counts(lines_list):
+            for line in reversed(lines_list):
+              if re.search(r'Plan: [0-9]', line):
+                adds = int(m.group(1)) if (m := re.search(r'(\d+) to add', line)) else 0
+                chgs = int(m.group(1)) if (m := re.search(r'(\d+) to change', line)) else 0
+                dest = int(m.group(1)) if (m := re.search(r'(\d+) to destroy', line)) else 0
+                return adds, chgs, dest, ('destroys' if dest > 0 else 'changes')
+              if 'No changes.' in line:
+                return 0, 0, 0, 'no-changes'
+            return 0, 0, 0, 'no-changes'
+
+          def make_resource_html(lines_list):
+            blocks = parse_blocks(lines_list)
+            if blocks:
+              html = ''
+              for addr, act, block_text in blocks:
+                html += (
+                  '<details>\n'
+                  f'<summary><code>{act} {addr}</code></summary>\n\n'
+                  '```hcl\n'
+                  f'{block_text.strip()}\n'
+                  '```\n\n'
+                  '</details>\n\n'
+                )
+              return html
+            tail = '\n'.join('\n'.join(lines_list).strip().splitlines()[-40:])
+            return f'```hcl\n{tail}\n```\n\n'
+
+          # Only keep modules that have real Terraform plan output
+          tf_modules = [
+            mod for mod in module_order
+            if any(re.search(r'Plan: [0-9]|No changes\.', l) for l in module_lines[mod])
+          ]
+
+          total_adds = total_chgs = total_dest = 0
+          has_drift = False
+          table_rows = []
+          module_details_html = []
+
+          for mod in tf_modules:
+            lines = module_lines[mod]
+            adds, chgs, dest, status = get_counts(lines)
+            total_adds += adds
+            total_chgs += chgs
+            total_dest += dest
+            if status in ('changes', 'destroys'):
+              has_drift = True
+
+            icon = ('✅ No changes' if status == 'no-changes' else
+                    '⚠️ Destroys'   if status == 'destroys'   else '📋 Changes')
+            table_rows.append(f'| `{mod}` | {icon} | {adds} | {chgs} | {dest} |')
+
+            if status in ('changes', 'destroys'):
+              resource_html = make_resource_html(lines)
+              module_details_html.append(
+                '<details>\n'
+                f'<summary><b>{mod}</b> &mdash; {icon} (+{adds} ~{chgs} -{dest})</summary>\n\n'
+                + resource_html
+                + '</details>\n\n'
+              )
+
+          # Fallback: no Terragrunt prefix found — parse the flat output as one block
+          if not tf_modules and plan_text.strip():
+            flat = plan_text.split('\n')
+            adds, chgs, dest, status = get_counts(flat)
+            total_adds, total_chgs, total_dest = adds, chgs, dest
+            has_drift = status in ('changes', 'destroys')
+            icon = ('⚠️ Destroys' if status == 'destroys' else
+                    '📋 Changes'  if has_drift             else '✅ No changes')
+            if has_drift:
+              resource_html = make_resource_html(flat)
+              module_details_html.append(
+                '<details>\n'
+                f'<summary><b>(all modules)</b> &mdash; {icon} (+{adds} ~{chgs} -{dest})</summary>\n\n'
+                + resource_html
+                + '</details>\n\n'
+              )
+
+          # ── GITHUB_OUTPUT ────────────────────────────────────────────────────
+          gh_output = os.environ.get('GITHUB_OUTPUT', '')
+          if gh_output:
+            with open(gh_output, 'a') as f:
+              f.write(f'adds={total_adds}\n')
+              f.write(f'changes={total_chgs}\n')
+              f.write(f'destroys={total_dest}\n')
+              f.write(f'has_drift={"true" if has_drift else "false"}\n')
+
+          # ── Build issue body ─────────────────────────────────────────────────
+          now = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+
+          module_table = '\n'.join([
+            '| Module | Status | Add | Change | Destroy |',
+            '|--------|--------|-----|--------|---------|',
+            *table_rows,
+          ]) if table_rows else '_No module breakdown available._'
+
+          details_section = (
+            '\n### Module Details\n\n' + ''.join(module_details_html)
+          ) if module_details_html else ''
+
+          body = (
+            f'## Infrastructure Drift Detected — `{env_name}`\n\n'
+            f'| Metric | Count |\n'
+            f'|---|---|\n'
+            f'| Resources to add | `{total_adds}` |\n'
+            f'| Resources to change | `{total_chgs}` |\n'
+            f'| Resources to destroy | `{total_dest}` |\n'
+            f'| Detected | {now} |\n'
+            f'| Workflow run | [View logs]({run_url}) |\n'
+            f'\n### Module Summary\n\n'
+            f'{module_table}'
+            f'{details_section}\n\n'
+            f'### Resolution\n\n'
+            f'Open a PR with the fix, or run `terragrunt run --all apply` in '
+            f'`regions/me-west1/{env_name}`.\n'
+          )
+
+          with open('/tmp/drift-details.md', 'w') as f:
+            f.write(body)
+          PYEOF
+
+      - name: "Open or update drift issue"
         if: steps.summary.outputs.has_drift == 'true'
         uses: actions/github-script@v7
+        env:
+          ENV_NAME:  ${{ needs.setup.outputs.env_name }}
+          ADDS:      ${{ steps.summary.outputs.adds }}
+          CHANGES:   ${{ steps.summary.outputs.changes }}
+          DESTROYS:  ${{ steps.summary.outputs.destroys }}
+          RUN_URL:   ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         with:
           script: |
-            const adds     = '${{ steps.summary.outputs.adds }}';
-            const changes  = '${{ steps.summary.outputs.changes }}';
-            const destroys = '${{ steps.summary.outputs.destroys }}';
-            const plan     = `${{ steps.summary.outputs.plan_body }}`;
-            const label    = '${{ env.DRIFT_LABEL }}';
-            const runUrl   = `${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}`;
+            const fs       = require('fs');
+            const envName  = process.env.ENV_NAME;
+            const adds     = process.env.ADDS;
+            const changes  = process.env.CHANGES;
+            const destroys = process.env.DESTROYS;
+            const runUrl   = process.env.RUN_URL;
+            const label    = `infrastructure-drift-${envName}`;
 
-            const title = `🚨 Infrastructure Drift — sandbox (+${adds} ~${changes} -${destroys})`;
-            const body = [
-              `## Infrastructure Drift Detected`,
-              ``,
-              `Sandbox infrastructure has drifted from the Terraform state.`,
-              ``,
-              `| Metric | Count |`,
-              `|---|---|`,
-              `| Resources to add | \`${adds}\` |`,
-              `| Resources to change | \`${changes}\` |`,
-              `| Resources to destroy | \`${destroys}\` |`,
-              `| Detected | ${new Date().toISOString()} |`,
-              `| Workflow run | [View logs](${runUrl}) |`,
-              ``,
-              `## Plan output`,
-              `\`\`\`hcl`,
-              plan,
-              `\`\`\``,
-              ``,
-              `## Resolution`,
-              `Run \`terragrunt run-all apply\` in \`regions/me-west1/sandbox\` or open a PR to fix the drift.`,
-            ].join('\n');
+            const title = `🚨 Infrastructure Drift — ${envName} (+${adds} ~${changes} -${destroys})`;
 
-            // Ensure the label exists
+            let body = '';
+            try { body = fs.readFileSync('/tmp/drift-details.md', 'utf8'); } catch (_) {}
+
             try {
               await github.rest.issues.createLabel({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                name: label,
-                color: 'e11d48',
-                description: 'Infrastructure has drifted from Terraform state',
+                owner: context.repo.owner, repo: context.repo.repo,
+                name: label, color: 'e11d48',
+                description: `Infrastructure drift in ${envName}`,
               });
             } catch (_) {}
 
-            // Find existing open drift issue
             const existing = await github.rest.issues.listForRepo({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              labels: label,
-              state: 'open',
+              owner: context.repo.owner, repo: context.repo.repo,
+              labels: label, state: 'open',
             });
 
             if (existing.data.length > 0) {
-              // Update the existing issue title + add a comment
               const issue = existing.data[0];
+              // Keep body current with latest plan; comment preserves history.
               await github.rest.issues.update({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: issue.number,
-                title,
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: issue.number, title, body,
               });
               await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
+                owner: context.repo.owner, repo: context.repo.repo,
                 issue_number: issue.number,
                 body: `### Drift still detected — ${new Date().toISOString()}\n\n+${adds} ~${changes} -${destroys}\n\n[Run logs](${runUrl})`,
               });
-              console.log(`Updated existing drift issue #${issue.number}`);
             } else {
-              const created = await github.rest.issues.create({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                title,
-                body,
-                labels: [label],
+              await github.rest.issues.create({
+                owner: context.repo.owner, repo: context.repo.repo,
+                title, body, labels: [label],
               });
-              console.log(`Opened drift issue #${created.data.number}`);
             }
 
-      # ── No drift — close any open drift issue ────────────────────────────────
-      - name: Close drift issue if resolved
+      - name: "Close drift issue if resolved"
         if: steps.plan.outputs.exit_code == '0' && steps.summary.outputs.has_drift == 'false'
         uses: actions/github-script@v7
+        env:
+          ENV_NAME: ${{ needs.setup.outputs.env_name }}
+          RUN_URL:  ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         with:
           script: |
-            const label = '${{ env.DRIFT_LABEL }}';
+            const envName = process.env.ENV_NAME;
+            const runUrl  = process.env.RUN_URL;
+            const label   = `infrastructure-drift-${envName}`;
+
             const existing = await github.rest.issues.listForRepo({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              labels: label,
-              state: 'open',
+              owner: context.repo.owner, repo: context.repo.repo,
+              labels: label, state: 'open',
             });
 
             for (const issue of existing.data) {
               await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
+                owner: context.repo.owner, repo: context.repo.repo,
                 issue_number: issue.number,
-                body: `✅ Drift resolved — sandbox is back in sync with Terraform state.\n\nAuto-closed by drift detection run on ${new Date().toISOString()}.`,
+                body: `✅ Drift resolved — \`${envName}\` is back in sync.\n\nAuto-closed by [drift detection run](${runUrl}) on ${new Date().toISOString()}.`,
               });
               await github.rest.issues.update({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: issue.number,
-                state: 'closed',
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: issue.number, state: 'closed',
               });
-              console.log(`Closed drift issue #${issue.number}`);
             }
 
-      - name: Drift summary
+      - name: "Drift summary"
         if: always()
+        env:
+          ENV_NAME:  ${{ needs.setup.outputs.env_name }}
+          EXIT_CODE: ${{ steps.plan.outputs.exit_code }}
+          HAS_DRIFT: ${{ steps.summary.outputs.has_drift }}
+          ADDS:      ${{ steps.summary.outputs.adds }}
+          CHANGES:   ${{ steps.summary.outputs.changes }}
+          DESTROYS:  ${{ steps.summary.outputs.destroys }}
         run: |
-          EXIT="${{ steps.plan.outputs.exit_code }}"
-          ADDS="${{ steps.summary.outputs.adds }}"
-          CHANGES="${{ steps.summary.outputs.changes }}"
-          DESTROYS="${{ steps.summary.outputs.destroys }}"
           {
-            echo "## 🔍 Drift Detection — Sandbox"
+            echo "## Drift Detection — \`${ENV_NAME}\`"
             echo "| | |"
             echo "|---|---|"
-            DRIFT="${{ steps.summary.outputs.has_drift }}"
-            if [ "$EXIT" = "1" ]; then
-              echo "| **Result** | ❌ Plan error |"
-            elif [ "$DRIFT" = "true" ]; then
+            if [ "$EXIT_CODE" = "1" ]; then
+              echo "| **Result** | ❌ Plan error — check logs |"
+            elif [ "$HAS_DRIFT" = "true" ]; then
               echo "| **Result** | 🚨 Drift detected |"
-              echo "| **To add** | \`$ADDS\` |"
-              echo "| **To change** | \`$CHANGES\` |"
-              echo "| **To destroy** | \`$DESTROYS\` |"
+              echo "| **To add** | \`${ADDS}\` |"
+              echo "| **To change** | \`${CHANGES}\` |"
+              echo "| **To destroy** | \`${DESTROYS}\` |"
             else
               echo "| **Result** | ✅ No drift |"
+            fi
+            if [ -f /tmp/drift-details.md ]; then
+              echo ""
+              cat /tmp/drift-details.md
             fi
           } >> "$GITHUB_STEP_SUMMARY"

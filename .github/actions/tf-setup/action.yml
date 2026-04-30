@@ -15,10 +15,17 @@ inputs:
 runs:
   using: composite
   steps:
+    - name: "Read Terraform version"
+      id: tf-version
+      shell: bash
+      run: |
+        VER=$(cat .terraform-version 2>/dev/null || echo "1.9.8")
+        echo "version=$VER" >> "$GITHUB_OUTPUT"
+
     - name: "Install Terraform"
       uses: hashicorp/setup-terraform@v3
       with:
-        terraform_version: "1.9.8"
+        terraform_version: ${{ steps.tf-version.outputs.version }}
         terraform_wrapper: false
 
     - name: "Install Terragrunt"
