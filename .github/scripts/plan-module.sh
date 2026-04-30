@@ -14,7 +14,7 @@ echo "::group::📋 $MODULE — terragrunt plan"
 cd "$STACK_DIR"
 
 PLAN_EXIT=0
-terragrunt plan --terragrunt-non-interactive -no-color 2>&1 | tee "$OUTPUT_FILE" || PLAN_EXIT=$?
+TERRAGRUNT_NON_INTERACTIVE=true terragrunt plan -no-color 2>&1 | tee "$OUTPUT_FILE" || PLAN_EXIT=$?
 
 echo "::endgroup::"
 
@@ -27,7 +27,7 @@ if [ "$PLAN_EXIT" -eq 1 ]; then
   exit 0  # Don't fail the step — let the summary job report it
 fi
 
-PLAN_LINE=$(grep -E "^Plan:|No changes\." "$OUTPUT_FILE" | tail -1 || echo "")
+PLAN_LINE=$(grep -E "Plan: [0-9]|No changes\." "$OUTPUT_FILE" | tail -1 || echo "")
 
 if [[ -z "$PLAN_LINE" ]] || [[ "$PLAN_LINE" == *"No changes"* ]]; then
   echo "✅ No changes" > "$RESULT_FILE"

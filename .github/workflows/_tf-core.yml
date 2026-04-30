@@ -38,6 +38,7 @@ on:
 env:
   TF_INPUT: "false"
   TF_IN_AUTOMATION: "true"
+  TERRAGRUNT_NON_INTERACTIVE: "true"
 
 jobs:
   # ── 1. setup — resolve project_id from environment name ───────────────────
@@ -119,7 +120,7 @@ jobs:
         run: |
           set -o pipefail
           EXIT=0
-          terragrunt plan --terragrunt-non-interactive -no-color 2>&1 \
+          terragrunt plan -no-color 2>&1 \
             | tee /tmp/plan-output.txt || EXIT=$?
 
           # Terragrunt prefixes lines with timestamps — match anywhere on the line.
@@ -392,7 +393,7 @@ jobs:
         continue-on-error: true
         run: |
           set -o pipefail
-          terragrunt run --all apply --terragrunt-non-interactive -auto-approve 2>&1 \
+          terragrunt run --all apply -auto-approve 2>&1 \
             | tee /tmp/apply-output.txt
 
       - name: "Write apply summary"
