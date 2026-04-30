@@ -16,7 +16,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # ── 1. Resolve project_id from env name ──────────────────────────────────────
   setup:
     name: "Resolve project"
     runs-on: ubuntu-latest
@@ -37,7 +36,6 @@ jobs:
           echo "project_id=$PROJECT" >> "$GITHUB_OUTPUT"
           echo "env_name=$ENV"       >> "$GITHUB_OUTPUT"
 
-  # ── 2. Detect drift ───────────────────────────────────────────────────────────
   drift:
     name: "Detect drift — ${{ needs.setup.outputs.env_name }}"
     needs: [setup]
@@ -46,14 +44,6 @@ jobs:
       contents: read
       id-token: write
       issues: write
-
-    env:
-      ENV_NAME:   ${{ needs.setup.outputs.env_name }}
-      PROJECT_ID: ${{ needs.setup.outputs.project_id }}
-      DRIFT_LABEL: "infrastructure-drift"
-      TERRAGRUNT_NON_INTERACTIVE: "true"
-      TF_INPUT: "false"
-      TF_IN_AUTOMATION: "true"
 
     steps:
       - uses: actions/checkout@v4
@@ -65,12 +55,13 @@ jobs:
           wif-provider:    ${{ secrets.WIF_PROVIDER }}
           project-id:      ${{ needs.setup.outputs.project_id }}
 
-      # Run plan across all modules. No -detailed-exitcode — that exits 2 per module
-      # with drift which Terragrunt treats as a dependency failure, cascading to all
-      # downstream modules. Parse output for changes instead.
       - name: "Run plan"
         id: plan
-        working-directory: regions/me-west1/${{ env.ENV_NAME }}
+        working-directory: regions/me-west1/${{ needs.setup.outputs.env_name }}
+        env:
+          TERRAGRUNT_NON_INTERACTIVE: "true"
+          TF_INPUT: "false"
+          TF_IN_AUTOMATION: "true"
         run: |
           set -o pipefail
           EXIT=0
@@ -94,28 +85,32 @@ jobs:
           echo "destroys=$DESTROYS"   >> "$GITHUB_OUTPUT"
           echo "has_drift=$HAS_DRIFT" >> "$GITHUB_OUTPUT"
 
-          TRUNCATED=$(echo "$PLAN" | tail -c 60000)
-          echo "plan_body<<EOF"   >> "$GITHUB_OUTPUT"
-          echo "$TRUNCATED"       >> "$GITHUB_OUTPUT"
-          echo "EOF"              >> "$GITHUB_OUTPUT"
-
-      # ── Open or update drift issue ────────────────────────────────────────────
       - name: "Open or update drift issue"
         if: steps.summary.outputs.has_drift == 'true'
         uses: actions/github-script@v7
+        env:
+          ENV_NAME:  ${{ needs.setup.outputs.env_name }}
+          ADDS:      ${{ steps.summary.outputs.adds }}
+          CHANGES:   ${{ steps.summary.outputs.changes }}
+          DESTROYS:  ${{ steps.summary.outputs.destroys }}
+          RUN_URL:   ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         with:
           script: |
-            const env      = process.env.ENV_NAME;
-            const adds     = '${{ steps.summary.outputs.adds }}';
-            const changes  = '${{ steps.summary.outputs.changes }}';
-            const destroys = '${{ steps.summary.outputs.destroys }}';
-            const plan     = `${{ steps.summary.outputs.plan_body }}`;
-            const label    = `${{ env.DRIFT_LABEL }}-${env}`;
-            const runUrl   = `${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}`;
+            const fs       = require('fs');
+            const envName  = process.env.ENV_NAME;
+            const adds     = process.env.ADDS;
+            const changes  = process.env.CHANGES;
+            const destroys = process.env.DESTROYS;
+            const runUrl   = process.env.RUN_URL;
+            const label    = `infrastructure-drift-${envName}`;
 
-            const title = `🚨 Infrastructure Drift — ${env} (+${adds} ~${changes} -${destroys})`;
+            // Read plan directly from file — avoids backtick/injection issues
+            let plan = '';
+            try { plan = fs.readFileSync('/tmp/plan.txt', 'utf8').slice(-60000); } catch (_) {}
+
+            const title = `🚨 Infrastructure Drift — ${envName} (+${adds} ~${changes} -${destroys})`;
             const body = [
-              `## Infrastructure Drift Detected — \`${env}\``,
+              `## Infrastructure Drift Detected — \`${envName}\``,
               ``,
               `| Metric | Count |`,
               `|---|---|`,
@@ -126,20 +121,19 @@ jobs:
               `| Workflow run | [View logs](${runUrl}) |`,
               ``,
               `## Plan output`,
-              `\`\`\`hcl`,
+              '```hcl',
               plan,
-              `\`\`\``,
+              '```',
               ``,
               `## Resolution`,
-              `Open a PR with the fix, or run \`terragrunt run --all apply\` in \`regions/me-west1/${env}\`.`,
+              `Open a PR with the fix, or run \`terragrunt run --all apply\` in \`regions/me-west1/${envName}\`.`,
             ].join('\n');
 
-            // Ensure label exists (per-env label so multiple envs don't collide)
             try {
               await github.rest.issues.createLabel({
                 owner: context.repo.owner, repo: context.repo.repo,
                 name: label, color: 'e11d48',
-                description: `Infrastructure drift in ${env}`,
+                description: `Infrastructure drift in ${envName}`,
               });
             } catch (_) {}
 
@@ -166,15 +160,17 @@ jobs:
               });
             }
 
-      # ── Close drift issue if resolved ────────────────────────────────────────
       - name: "Close drift issue if resolved"
         if: steps.plan.outputs.exit_code == '0' && steps.summary.outputs.has_drift == 'false'
         uses: actions/github-script@v7
+        env:
+          ENV_NAME: ${{ needs.setup.outputs.env_name }}
+          RUN_URL:  ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         with:
           script: |
-            const env   = process.env.ENV_NAME;
-            const label = `${{ env.DRIFT_LABEL }}-${env}`;
-            const runUrl = `${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}`;
+            const envName = process.env.ENV_NAME;
+            const runUrl  = process.env.RUN_URL;
+            const label   = `infrastructure-drift-${envName}`;
 
             const existing = await github.rest.issues.listForRepo({
               owner: context.repo.owner, repo: context.repo.repo,
@@ -185,7 +181,7 @@ jobs:
               await github.rest.issues.createComment({
                 owner: context.repo.owner, repo: context.repo.repo,
                 issue_number: issue.number,
-                body: `✅ Drift resolved — \`${env}\` is back in sync.\n\nAuto-closed by [drift detection run](${runUrl}) on ${new Date().toISOString()}.`,
+                body: `✅ Drift resolved — \`${envName}\` is back in sync.\n\nAuto-closed by [drift detection run](${runUrl}) on ${new Date().toISOString()}.`,
               });
               await github.rest.issues.update({
                 owner: context.repo.owner, repo: context.repo.repo,
@@ -193,26 +189,27 @@ jobs:
               });
             }
 
-      # ── Step summary ──────────────────────────────────────────────────────────
       - name: "Drift summary"
         if: always()
+        env:
+          ENV_NAME:  ${{ needs.setup.outputs.env_name }}
+          EXIT_CODE: ${{ steps.plan.outputs.exit_code }}
+          HAS_DRIFT: ${{ steps.summary.outputs.has_drift }}
+          ADDS:      ${{ steps.summary.outputs.adds }}
+          CHANGES:   ${{ steps.summary.outputs.changes }}
+          DESTROYS:  ${{ steps.summary.outputs.destroys }}
         run: |
-          EXIT="${{ steps.plan.outputs.exit_code }}"
-          DRIFT="${{ steps.summary.outputs.has_drift }}"
-          ADDS="${{ steps.summary.outputs.adds }}"
-          CHANGES="${{ steps.summary.outputs.changes }}"
-          DESTROYS="${{ steps.summary.outputs.destroys }}"
           {
-            echo "## Drift Detection — \`${{ env.ENV_NAME }}\`"
+            echo "## Drift Detection — \`${ENV_NAME}\`"
             echo "| | |"
             echo "|---|---|"
-            if [ "$EXIT" = "1" ]; then
+            if [ "$EXIT_CODE" = "1" ]; then
               echo "| **Result** | ❌ Plan error — check logs |"
-            elif [ "$DRIFT" = "true" ]; then
+            elif [ "$HAS_DRIFT" = "true" ]; then
               echo "| **Result** | 🚨 Drift detected |"
-              echo "| **To add** | \`$ADDS\` |"
-              echo "| **To change** | \`$CHANGES\` |"
-              echo "| **To destroy** | \`$DESTROYS\` |"
+              echo "| **To add** | \`${ADDS}\` |"
+              echo "| **To change** | \`${CHANGES}\` |"
+              echo "| **To destroy** | \`${DESTROYS}\` |"
             else
               echo "| **Result** | ✅ No drift |"
             fi
