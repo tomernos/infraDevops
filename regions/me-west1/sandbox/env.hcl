@@ -14,3 +14,4 @@ locals {
   # Feature flags
   use_gke = false  # Phase 5
 }
+
