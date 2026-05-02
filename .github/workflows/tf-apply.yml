@@ -1,8 +1,11 @@
 name: "Terraform Apply"
-# Triggered on merge (push) to main only. Single long-lived branch.
+# Triggered on merge (push) to main, OR manually via workflow_dispatch.
 # Environments are folders, not branches: regions/<region>/<env>/.
 #
-# Detect logic mirrors tf-plan.yml (same git diff against the previous commit on main).
+# Push path: detect changed envs from git diff, apply only what changed.
+# Manual path: apply the selected environment directly — no diff logic needed.
+#   Use for: initial deploys, forced re-sync, post-incident recovery.
+#
 # For each affected env, calls _tf-core which:
 #   1. plans the env (artifacts uploaded)
 #   2. summarizes (has_changes signal)
@@ -19,9 +22,16 @@ on:
       - ".github/workflows/tf-apply.yml"
       - ".github/workflows/_tf-core.yml"
       - ".github/actions/tf-setup/**"
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Environment to apply"
+        type: choice
+        options: [sandbox, staging, prod]
+        required: true
 
 concurrency:
-  group: tf-apply-${{ github.ref_name }}
+  group: tf-apply-${{ inputs.environment || github.ref_name }}
   cancel-in-progress: false   # never cancel an in-progress apply
 
 jobs:
@@ -40,6 +50,16 @@ jobs:
         id: detect
         run: |
           REGION="me-west1"
+
+          # Manual dispatch — apply exactly the selected environment, no diff needed.
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            ENVS='["${{ inputs.environment }}"]'
+            echo "::notice::Manual dispatch — applying env: ${{ inputs.environment }}"
+            echo "envs=$ENVS" >> "$GITHUB_OUTPUT"
+            echo "region=$REGION" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
           CHANGED=$(git diff --name-only HEAD~1 HEAD)
 
           echo "Changed files:"
