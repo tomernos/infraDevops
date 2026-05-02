@@ -1,0 +1,171 @@
+name: "Terraform Destroy"
+# DANGER: destroys ALL infrastructure in the selected environment.
+# Manual trigger only. Always requires approval from the environment's required reviewers.
+#
+# Flow:
+#   guard       — validates that the typed confirmation matches the selected env
+#   setup       — resolves GCP project_id
+#   plan-destroy — runs `terragrunt run --all plan -- -destroy` and posts the diff
+#   destroy     — environment-gated (reviewer must approve), then executes destroy
+#
+# The approval prompt shows the plan-destroy summary — reviewers can see exactly
+# what will be removed before clicking Approve.
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Environment to destroy"
+        type: choice
+        options: [sandbox, staging, prod]
+        required: true
+      confirm:
+        description: 'Re-type the environment name to confirm (must match exactly)'
+        type: string
+        required: true
+
+concurrency:
+  group: tf-destroy-${{ inputs.environment }}
+  cancel-in-progress: false   # never cancel an in-flight destroy
+
+jobs:
+  # ── 1. guard — prevent accidental runs ───────────────────────────────────────
+  guard:
+    name: "Validate confirmation"
+    runs-on: ubuntu-latest
+    steps:
+      - name: "Confirm matches env"
+        run: |
+          if [ "${{ inputs.confirm }}" != "${{ inputs.environment }}" ]; then
+            echo "::error::Confirmation mismatch — typed '${{ inputs.confirm }}' but selected env is '${{ inputs.environment }}'"
+            exit 1
+          fi
+          echo "✅ Confirmed: destroying ${{ inputs.environment }}"
+
+  # ── 2. setup — resolve project_id ────────────────────────────────────────────
+  setup:
+    name: "Resolve project"
+    needs: [guard]
+    runs-on: ubuntu-latest
+    outputs:
+      project_id: ${{ steps.resolve.outputs.project_id }}
+    steps:
+      - name: "Resolve"
+        id: resolve
+        run: |
+          case "${{ inputs.environment }}" in
+            sandbox) PROJECT="cryptoshare-e5172" ;;
+            staging) PROJECT="sweptlock-staging" ;;
+            prod)    PROJECT="sweptlock-prod" ;;
+            *) echo "::error::Unknown env ${{ inputs.environment }}"; exit 1 ;;
+          esac
+          echo "project_id=$PROJECT" >> "$GITHUB_OUTPUT"
+
+  # ── 3. plan-destroy — show what will be removed ──────────────────────────────
+  plan-destroy:
+    name: "Plan destroy — ${{ inputs.environment }}"
+    needs: [setup]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: "Setup Terraform + Terragrunt + GCP auth"
+        uses: ./.github/actions/tf-setup
+        with:
+          service-account: ${{ secrets.SA_CI_TF_PLAN_EMAIL }}
+          wif-provider:    ${{ secrets.WIF_PROVIDER }}
+          project-id:      ${{ needs.setup.outputs.project_id }}
+
+      - name: "Plan destroy (dry run)"
+        working-directory: regions/me-west1/${{ inputs.environment }}
+        env:
+          TERRAGRUNT_NON_INTERACTIVE: "true"
+          TF_INPUT: "false"
+          TF_IN_AUTOMATION: "true"
+        run: |
+          set -o pipefail
+          EXIT=0
+          terragrunt run --all plan -- -destroy -no-color 2>&1 | tee /tmp/destroy-plan.txt || EXIT=$?
+          if [ "$EXIT" -eq 1 ]; then
+            echo "::error::Plan failed — check output above"
+            exit 1
+          fi
+
+      - name: "Post plan summary"
+        run: |
+          {
+            echo "## ⚠️ Destroy Plan — \`${{ inputs.environment }}\`"
+            echo ""
+            echo "> **Review this plan carefully before approving the destroy job below.**"
+            echo ""
+            echo "Actor: @${{ github.actor }} | Commit: \`${GITHUB_SHA::7}\`"
+            echo ""
+            echo "<details><summary>Full plan output</summary>"
+            echo ""
+            echo '```'
+            cat /tmp/destroy-plan.txt
+            echo '```'
+            echo ""
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ── 4. destroy — approval-gated execution ────────────────────────────────────
+  # The `environment:` binding is the approval gate.
+  # Reviewers see the plan-destroy summary before clicking Approve.
+  destroy:
+    name: "Destroy — ${{ inputs.environment }}"
+    needs: [setup, plan-destroy]
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: "Setup Terraform + Terragrunt + GCP auth"
+        uses: ./.github/actions/tf-setup
+        with:
+          service-account: ${{ secrets.SA_CI_TF_APPLY_EMAIL }}
+          wif-provider:    ${{ secrets.WIF_PROVIDER }}
+          project-id:      ${{ needs.setup.outputs.project_id }}
+
+      - name: "Destroy all stacks"
+        id: destroy
+        working-directory: regions/me-west1/${{ inputs.environment }}
+        continue-on-error: true
+        env:
+          TERRAGRUNT_NON_INTERACTIVE: "true"
+          TF_INPUT: "false"
+          TF_IN_AUTOMATION: "true"
+        run: |
+          set -o pipefail
+          terragrunt run --all destroy -- -auto-approve 2>&1 | tee /tmp/destroy-output.txt
+
+      - name: "Destroy summary"
+        if: always()
+        run: |
+          STATUS="${{ steps.destroy.outcome }}"
+          ICON="✅"
+          [ "$STATUS" != "success" ] && ICON="❌"
+          {
+            printf "## %s Terraform Destroy — \`%s\`\n\n" "$ICON" "${{ inputs.environment }}"
+            printf "| | |\n|---|---|\n"
+            printf "| Status | %s |\n" "$STATUS"
+            printf "| Commit | \`%s\` |\n" "${GITHUB_SHA::7}"
+            printf "| Actor  | @%s |\n\n" "${{ github.actor }}"
+            echo "<details><summary>Destroy output</summary>"
+            echo ""
+            echo '```'
+            tail -c 8000 /tmp/destroy-output.txt 2>/dev/null || echo "(no output)"
+            echo '```'
+            echo ""
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: "Fail if destroy errored"
+        if: steps.destroy.outcome == 'failure'
+        run: exit 1
