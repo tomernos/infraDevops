@@ -57,8 +57,8 @@ SA_APPLY="${PREFIX}-sa-tf-apply"
 SA_DEPLOY="${PREFIX}-sa-ci-deploy"
 
 GITHUB_OWNER="tomernos"
-APP_GITHUB_OWNER="eladrz"
-APP_REPO="Aladin"
+APP_GITHUB_OWNER="sweptlock"
+APP_REPO="sweptlock-engine"
 INFRA_REPO="infraDevops"
 
 SA_PLAN_EMAIL="${SA_PLAN}@${PROJECT_ID}.iam.gserviceaccount.com"

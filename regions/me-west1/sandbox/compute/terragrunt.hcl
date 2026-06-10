@@ -38,6 +38,8 @@ inputs = {
   subnet_self_link = dependency.networking.outputs.subnet_self_link
   vpc_name         = "swpt-mw1-sandbox-vpc"
   sa_api_email     = dependency.security.outputs.sa_api_email
-  image_url        = "${dependency.registry.outputs.image_base_url}/api:latest"
-  web_image_url    = "${dependency.registry.outputs.image_base_url}/web:latest"
+  image_url                = "${dependency.registry.outputs.image_base_url}/api:latest"
+  web_image_url            = "${dependency.registry.outputs.image_base_url}/web:latest"
+  platform_api_image_url   = "${dependency.registry.outputs.image_base_url}/platform-api:latest"
+  platform_panel_image_url = "${dependency.registry.outputs.image_base_url}/platform-panel:latest"
 }

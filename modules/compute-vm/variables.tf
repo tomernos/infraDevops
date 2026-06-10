@@ -19,3 +19,13 @@ variable "web_image_url" {
   type        = string
   description = "Full Artifact Registry image URL for the frontend web app"
 }
+
+variable "platform_api_image_url" {
+  type        = string
+  description = "Full Artifact Registry image URL for the platform-api service"
+}
+
+variable "platform_panel_image_url" {
+  type        = string
+  description = "Full Artifact Registry image URL for the platform-panel SPA"
+}

@@ -92,6 +92,7 @@ resource "google_kms_crypto_key_iam_member" "api_kms" {
 
 locals {
   secret_ids = toset([
+    # Main backend secrets
     "db-host",
     "db-port",
     "db-name",
@@ -101,7 +102,13 @@ locals {
     "firebase-admin-sdk-json",
     "cors-origin",
     "admin-email",
-    "server-kek-master-key",   # Phase 1: still env-var based; Phase 2: replaced by Cloud KMS
+    "server-kek-master-key",      # Phase 1: env-var based; Phase 2: replace with Cloud KMS
+    # Platform-api secrets
+    "platform-db-user",           # read-only postgres user for platform-api
+    "platform-db-password",
+    "platform-private-ip",        # PRIVATE_BIND_IP: Tailscale/WireGuard/VPC IP — set at deploy time
+    "platform-cors-origins",      # space-separated origin list for platform-api CORS
+    "firebase-project-id",        # shared with platform-api
   ])
 }
 
