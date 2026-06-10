@@ -8,14 +8,16 @@ set -euo pipefail
 PROJECT_ID="${1:-cryptoshare-e5172}"
 PREFIX="swpt-mw1-sandbox"
 
-# Paths to your app files
 INFRA_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-# ── Machine-specific path — update when switching machines ────────────────────
-APP_DIR="${APP_DIR:-/mnt/c/Users/tomer/Desktop/PersonalGitProjects/Aladin/aladin-backend}"  # Windows (WSL)
-# APP_DIR="${APP_DIR:-$HOME/Desktop/SoftwareDev/Aladin/aladin-backend}"               # Mac
+# ── Machine-specific paths — update when switching machines ───────────────────
+APP_DIR="${APP_DIR:-/mnt/c/Users/tomer/Desktop/PersonalGitProjects/Sweptlock/backend}"   # Windows (WSL)
+# APP_DIR="${APP_DIR:-$HOME/Desktop/PersonalGitProjects/Sweptlock/backend}"               # Mac
+PLATFORM_API_DIR="${PLATFORM_API_DIR:-/mnt/c/Users/tomer/Desktop/PersonalGitProjects/sweptlock-platform/api}"
+
 ENV_FILE="$APP_DIR/.env"
 SA_KEY_FILE="$APP_DIR/serviceAccountKey.json"
+PLATFORM_ENV_FILE="$PLATFORM_API_DIR/.env"
 
 echo "=== Populating Secret Manager: $PROJECT_ID ==="
 echo ""
@@ -26,12 +28,18 @@ echo ""
 
 # ── Read values from .env ─────────────────────────────────────────────────────
 read_env() {
-  grep -E "^${1}=" "$ENV_FILE" | cut -d'=' -f2- | tr -d '"' || echo ""
+  grep -E "^${1}=" "$1" | cut -d'=' -f2- | tr -d '"' || echo ""
 }
 
-FIREBASE_BUCKET="$(read_env FIREBASE_STORAGE_BUCKET)"
-KEK="$(read_env SERVER_KEK_MASTER_KEY)"
-ADMIN_EMAIL="$(read_env ADMIN_EMAIL)"
+read_from_file() {
+  local file="$1"
+  local key="$2"
+  grep -E "^${key}=" "$file" 2>/dev/null | cut -d'=' -f2- | tr -d '"' || echo ""
+}
+
+FIREBASE_BUCKET="$(read_from_file "$ENV_FILE" FIREBASE_STORAGE_BUCKET)"
+KEK="$(read_from_file "$ENV_FILE" SERVER_KEK_MASTER_KEY)"
+ADMIN_EMAIL="$(read_from_file "$ENV_FILE" ADMIN_EMAIL)"
 CORS_ORIGIN="${CORS_ORIGIN:-*}"
 
 # ── Read DB outputs from Terraform ────────────────────────────────────────────
@@ -44,9 +52,8 @@ DB_PASSWORD=$(cd "$INFRA_DIR/regions/me-west1/sandbox/database" \
 [[ -n "$DB_HOST" ]]     || { echo "ERROR: Could not read private_ip from database output. Run 'terragrunt apply' in database stack first."; exit 1; }
 [[ -n "$DB_PASSWORD" ]] || { echo "ERROR: Could not read db_password from database output."; exit 1; }
 
-# Known static DB values
 DB_PORT="5432"
-DB_NAME="aladin_db"
+DB_NAME="sweptlock_db"
 DB_USER="sweptlock"
 
 # ── Push helper ───────────────────────────────────────────────────────────────
@@ -63,8 +70,8 @@ push() {
     --quiet 2>/dev/null && echo "  OK    $secret_id" || echo "  FAIL  $secret_id"
 }
 
-# ── Push all secrets ──────────────────────────────────────────────────────────
-echo ">>> Pushing secrets..."
+# ── Main app secrets ──────────────────────────────────────────────────────────
+echo ">>> Pushing main app secrets..."
 push "db-host"                  "$DB_HOST"
 push "db-port"                  "$DB_PORT"
 push "db-name"                  "$DB_NAME"
@@ -81,6 +88,33 @@ echo -n "$(cat "$SA_KEY_FILE")" | gcloud secrets versions add "$PREFIX-firebase-
   --data-file=- \
   --quiet 2>/dev/null && echo "  OK    $PREFIX-firebase-admin-sdk-json" \
   || echo "  FAIL  $PREFIX-firebase-admin-sdk-json"
+
+# ── Platform API secrets ──────────────────────────────────────────────────────
+echo ""
+echo ">>> Pushing platform API secrets..."
+
+# Platform DB: defaults to same DB host/password, separate DB user (sweptlock_platform_user).
+# Override with PLATFORM_DB_USER / PLATFORM_DB_PASSWORD env vars before running.
+PLATFORM_DB_USER="${PLATFORM_DB_USER:-sweptlock}"
+PLATFORM_DB_PASSWORD="${PLATFORM_DB_PASSWORD:-$DB_PASSWORD}"
+
+# PRIVATE_BIND_IP: the Tailscale / VPC private IP the platform API and NGINX bind to.
+# Set this to your Tailscale IP (100.x.x.x) or GCP VPC internal IP before running.
+PRIVATE_BIND_IP="${PRIVATE_BIND_IP:-}"
+[[ -n "$PRIVATE_BIND_IP" ]] || echo "  WARN  PRIVATE_BIND_IP not set — platform-private-ip will be skipped"
+
+# PLATFORM_CORS_ORIGINS: URL(s) of the platform panel (comma-separated for multiple).
+# In production this is the panel's private URL, e.g. http://100.x.x.x:8080
+PLATFORM_CORS_ORIGINS="${PLATFORM_CORS_ORIGINS:-$(read_from_file "$PLATFORM_ENV_FILE" CORS_ORIGINS 2>/dev/null)}"
+
+FIREBASE_PROJECT_ID="$(read_from_file "$ENV_FILE" FIREBASE_PROJECT_ID)"
+[[ -n "$FIREBASE_PROJECT_ID" ]] || FIREBASE_PROJECT_ID="$(read_from_file "$PLATFORM_ENV_FILE" FIREBASE_PROJECT_ID 2>/dev/null)"
+
+push "platform-db-user"       "$PLATFORM_DB_USER"
+push "platform-db-password"   "$PLATFORM_DB_PASSWORD"
+push "platform-private-ip"    "$PRIVATE_BIND_IP"
+push "platform-cors-origins"  "$PLATFORM_CORS_ORIGINS"
+push "firebase-project-id"    "$FIREBASE_PROJECT_ID"
 
 echo ""
 echo "=== Done. Verify in console: https://console.cloud.google.com/security/secret-manager?project=$PROJECT_ID ==="
