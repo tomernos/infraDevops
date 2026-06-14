@@ -5,8 +5,8 @@
 # Usage: ./scripts/populate-secrets.sh
 set -euo pipefail
 
-PROJECT_ID="${1:-cryptoshare-e5172}"
-PREFIX="swpt-mw1-sandbox"
+PROJECT_ID="${1:-sweptlock-dev-844f2}"
+PREFIX="${2:-swpt-mw1-dev}"
 
 INFRA_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
@@ -44,9 +44,10 @@ CORS_ORIGIN="${CORS_ORIGIN:-*}"
 
 # ── Read DB outputs from Terraform ────────────────────────────────────────────
 echo ">>> Reading Cloud SQL outputs from Terraform..."
-DB_HOST=$(cd "$INFRA_DIR/regions/me-west1/sandbox/database" \
+ENV="${ENV:-dev}"
+DB_HOST=$(cd "$INFRA_DIR/regions/me-west1/${ENV}/database" \
   && terragrunt output -raw private_ip 2>/dev/null) || DB_HOST=""
-DB_PASSWORD=$(cd "$INFRA_DIR/regions/me-west1/sandbox/database" \
+DB_PASSWORD=$(cd "$INFRA_DIR/regions/me-west1/${ENV}/database" \
   && terragrunt output -raw db_password 2>/dev/null) || DB_PASSWORD=""
 
 [[ -n "$DB_HOST" ]]     || { echo "ERROR: Could not read private_ip from database output. Run 'terragrunt apply' in database stack first."; exit 1; }

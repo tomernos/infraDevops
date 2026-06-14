@@ -34,10 +34,10 @@ SA_API_EMAIL="${2:-}"
 # ── Per-environment config ────────────────────────────────────────────────────
 
 case "$ENV" in
-  sandbox) PROJECT_ID="cryptoshare-e5172" ;;
+  dev)     PROJECT_ID="sweptlock-dev-844f2" ;;
   staging) PROJECT_ID="sweptlock-staging" ;;
   prod)    PROJECT_ID="sweptlock-prod" ;;
-  *) echo "Unknown env '${ENV}'. Valid: sandbox | staging | prod"; exit 1 ;;
+  *) echo "Unknown env '${ENV}'. Valid: dev | staging | prod"; exit 1 ;;
 esac
 
 TENANT="swpt"
@@ -196,16 +196,14 @@ bind_project "$SA_APPLY_EMAIL" "roles/editor"
 bind_project "$SA_APPLY_EMAIL" "roles/resourcemanager.projectIamAdmin"
 bind_bucket  "$SA_APPLY_EMAIL" "roles/storage.admin"
 
-# Deploy SA: image push + SSH via IAP
+# Deploy SA: image push + Cloud Run deploy
 for ROLE in \
   "roles/artifactregistry.writer" \
-  "roles/compute.osLogin" \
-  "roles/iap.tunnelResourceAccessor" \
-  "roles/compute.viewer"; do
+  "roles/run.developer"; do
   bind_project "$SA_DEPLOY_EMAIL" "$ROLE"
 done
 
-# Deploy SA -> serviceAccountUser on sa-api (osLogin to VMs running as sa-api)
+# Deploy SA -> serviceAccountUser on sa-api (so Cloud Run can run as sa-api)
 if [[ -n "$SA_API_EMAIL" ]]; then
   info "ci-deploy -> serviceAccountUser on $SA_API_EMAIL"
   gcloud iam service-accounts add-iam-policy-binding "$SA_API_EMAIL" \
@@ -215,7 +213,7 @@ if [[ -n "$SA_API_EMAIL" ]]; then
   ok "ci-deploy -> serviceAccountUser"
 else
   echo ""
-  echo "  WARNING: sa_api_email not provided — skipping ci-deploy -> sa-api binding."
+  echo "  NOTE: sa_api_email not provided — skipping ci-deploy -> sa-api binding."
   echo "  Re-run after the security module is applied:"
   echo "    ./scripts/bootstrap.sh ${ENV} <sa_api_email>"
 fi
@@ -260,8 +258,8 @@ echo "  Environment secret  (Settings -> Environments -> ${ENV}):"
 echo ""
 echo "    SA_CI_TF_APPLY_EMAIL  = ${SA_APPLY_EMAIL}"
 echo ""
-echo "  App repo (${APP_REPO}) secrets:"
+echo "  App repo (${APP_REPO}) secrets (name them with _${ENV^^} suffix):"
 echo ""
-echo "    WIF_PROVIDER          = ${WIF_PROVIDER_FULL}"
-echo "    SA_CI_DEPLOY_EMAIL    = ${SA_DEPLOY_EMAIL}"
+echo "    WIF_PROVIDER_${ENV^^}    = ${WIF_PROVIDER_FULL}"
+echo "    SA_CI_DEPLOY_${ENV^^}    = ${SA_DEPLOY_EMAIL}"
 echo ""

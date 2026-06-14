@@ -1,59 +1,64 @@
 # Sweptlock Infrastructure — Makefile
-# Shortcuts for common Terragrunt + Docker operations.
-# Usage: make <target>   (run from repo root)
+# Shortcuts for common Terragrunt + Cloud Run operations.
+# Usage: make <target> [ENV=dev]
 
-ENV     ?= sandbox
+ENV     ?= dev
 REGION  ?= me-west1
-PROJECT ?= cryptoshare-e5172
+PROJECT ?= sweptlock-dev-844f2
 PREFIX  ?= swpt-mw1-$(ENV)
 
 STACK_ROOT := regions/$(REGION)/$(ENV)
 IMAGE_BASE := $(REGION)-docker.pkg.dev/$(PROJECT)/$(PREFIX)-registry/api
+SERVICE    := $(PREFIX)-api
+
+# Source path of the backend (on WSL)
+BACKEND_DIR ?= /mnt/c/Users/tomer/Desktop/PersonalGitProjects/Sweptlock/backend
 
 .PHONY: help init plan apply destroy \
-        apply-networking apply-security apply-registry apply-database apply-compute \
+        apply-security apply-registry apply-networking apply-database \
+        apply-workload-identity apply-cloud-run \
         build push deploy \
-        populate-secrets setup-cicd-sa bootstrap \
-        ssh logs health
+        populate-secrets \
+        logs health
 
 # ── Default ───────────────────────────────────────────────────────────────────
 help:
 	@echo ""
-	@echo "Sweptlock Infrastructure"
+	@echo "Sweptlock Infrastructure  (ENV=$(ENV)  PROJECT=$(PROJECT))"
 	@echo ""
 	@echo "  Bootstrap"
-	@echo "    make bootstrap          Run once: create GCS bucket + enable APIs"
-	@echo "    make setup-cicd-sa      Create GitHub CI service account"
+	@echo "    make bootstrap ENV=dev     Run once: create GCS bucket + WIF + SAs"
 	@echo ""
-	@echo "  Terraform"
-	@echo "    make init               terragrunt run --all init"
-	@echo "    make plan               terragrunt run --all plan"
-	@echo "    make apply              Apply all stacks (ordered by deps)"
-	@echo "    make destroy            Destroy all stacks"
-	@echo "    make apply-<module>     Apply single stack (networking|security|registry|database|compute)"
+	@echo "  Terraform (all stacks)"
+	@echo "    make init                  terragrunt run --all init"
+	@echo "    make plan                  terragrunt run --all plan"
+	@echo "    make apply                 Apply all stacks in dependency order"
+	@echo "    make destroy               Destroy all stacks"
 	@echo ""
-	@echo "  Docker"
-	@echo "    make build              Build docker image (linux/amd64)"
-	@echo "    make push               Push image to Artifact Registry"
-	@echo "    make deploy             build + push"
+	@echo "  Terraform (single stack)"
+	@echo "    make apply-security"
+	@echo "    make apply-registry"
+	@echo "    make apply-networking"
+	@echo "    make apply-database"
+	@echo "    make apply-workload-identity"
+	@echo "    make apply-cloud-run"
+	@echo ""
+	@echo "  Docker (manual push)"
+	@echo "    make build                 Build linux/amd64 image"
+	@echo "    make push                  Push image to Artifact Registry"
+	@echo "    make deploy                build + push + gcloud run deploy"
 	@echo ""
 	@echo "  Secrets"
-	@echo "    make populate-secrets   Push all secrets to Secret Manager"
+	@echo "    make populate-secrets      Push app secrets from .env into Secret Manager"
 	@echo ""
-	@echo "  VM"
-	@echo "    make ssh                SSH into the API VM via IAP"
-	@echo "    make logs               Tail container logs on VM"
-	@echo "    make health             Curl the health endpoint"
-	@echo ""
-	@echo "  Options: ENV=$(ENV) REGION=$(REGION) PROJECT=$(PROJECT)"
+	@echo "  Operations"
+	@echo "    make logs                  Tail Cloud Run logs"
+	@echo "    make health                Curl Cloud Run health endpoint"
 	@echo ""
 
 # ── Bootstrap ────────────────────────────────────────────────────────────────
 bootstrap:
-	./scripts/bootstrap.sh $(PROJECT) $(REGION) $(ENV)
-
-setup-cicd-sa:
-	./scripts/setup-cicd-sa.sh $(PROJECT)
+	./scripts/bootstrap.sh $(ENV)
 
 # ── Terraform: all stacks ────────────────────────────────────────────────────
 init:
@@ -69,62 +74,56 @@ destroy:
 	cd $(STACK_ROOT) && terragrunt run --all destroy --non-interactive
 
 # ── Terraform: individual stacks ─────────────────────────────────────────────
-apply-networking:
-	cd $(STACK_ROOT)/networking && terragrunt apply -auto-approve
-
 apply-security:
 	cd $(STACK_ROOT)/security && terragrunt apply -auto-approve
 
 apply-registry:
 	cd $(STACK_ROOT)/registry && terragrunt apply -auto-approve
 
+apply-networking:
+	cd $(STACK_ROOT)/networking && terragrunt apply -auto-approve
+
 apply-database:
 	cd $(STACK_ROOT)/database && terragrunt apply -auto-approve
 
-apply-compute:
-	cd $(STACK_ROOT)/compute && terragrunt apply -auto-approve
+apply-workload-identity:
+	cd $(STACK_ROOT)/workload-identity && terragrunt apply -auto-approve
 
-# ── Docker ───────────────────────────────────────────────────────────────────
-ALADIN_BACKEND ?= $(HOME)/Desktop/PersonalGitProjects/Aladin/aladin-backend
+apply-cloud-run:
+	cd $(STACK_ROOT)/cloud-run && terragrunt apply -auto-approve
 
+# ── Docker (manual builds — CI uses GitHub Actions) ──────────────────────────
 build:
 	gcloud auth configure-docker $(REGION)-docker.pkg.dev --quiet
 	docker build \
 		--platform linux/amd64 \
-		-f $(ALADIN_BACKEND)/docker/Dockerfile \
+		-f $(BACKEND_DIR)/docker/Dockerfile \
 		-t $(IMAGE_BASE):latest \
-		$(ALADIN_BACKEND)
+		$(BACKEND_DIR)
 
 push:
 	docker push $(IMAGE_BASE):latest
 
 deploy: build push
+	gcloud run deploy $(SERVICE) \
+		--image=$(IMAGE_BASE):latest \
+		--region=$(REGION) \
+		--project=$(PROJECT) \
+		--quiet
 
 # ── Secrets ──────────────────────────────────────────────────────────────────
 populate-secrets:
 	./scripts/populate-secrets.sh $(PROJECT)
 
-# ── VM operations ────────────────────────────────────────────────────────────
-VM_NAME := $(PREFIX)-api
-VM_ZONE := $(REGION)-a
-
-_vm_ip:
-	@cd $(STACK_ROOT)/compute && terragrunt output -raw external_ip 2>/dev/null
-
-ssh:
-	gcloud compute ssh $(VM_NAME) \
-		--zone=$(VM_ZONE) \
-		--tunnel-through-iap \
-		--project=$(PROJECT)
-
+# ── Cloud Run operations ─────────────────────────────────────────────────────
 logs:
-	gcloud compute ssh $(VM_NAME) \
-		--zone=$(VM_ZONE) \
-		--tunnel-through-iap \
+	gcloud run services logs tail $(SERVICE) \
 		--project=$(PROJECT) \
-		--command="docker logs sweptlock-api -f --tail=100"
+		--region=$(REGION)
 
 health:
-	@IP=$$(cd $(STACK_ROOT)/compute && terragrunt output -raw external_ip 2>/dev/null); \
-	echo "GET http://$$IP:4000/health"; \
-	curl -s http://$$IP:4000/health | jq .
+	@URL=$$(gcloud run services describe $(SERVICE) \
+		--region=$(REGION) --project=$(PROJECT) \
+		--format='value(status.url)'); \
+	echo "GET $$URL/health"; \
+	curl -sf "$$URL/health" | jq .
