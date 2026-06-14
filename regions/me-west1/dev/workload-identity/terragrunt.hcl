@@ -19,10 +19,10 @@ inputs = {
   github_owner = "tomernos"
   # app repo owner may differ from infra owner
   app_github_owner = "SweptLock"
-  app_repo     = "sweptlock-engine"
-  infra_repo   = "sweptlock-infra"
-  state_bucket = "swpt-mw1-infra-dev-tf"
-  sa_api_email = dependency.security.outputs.sa_api_email
+  app_repo         = "sweptlock-engine"
+  infra_repo       = "sweptlock-infra"
+  state_bucket     = "swpt-mw1-infra-dev-tf"
+  sa_api_email     = dependency.security.outputs.sa_api_email
 }
 
 # After apply, copy these outputs into GitHub Secrets for the sweptlock-engine repo:

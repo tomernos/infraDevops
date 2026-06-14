@@ -27,7 +27,7 @@ on:
       environment:
         description: "Environment to apply"
         type: choice
-        options: [sandbox, staging, prod]
+        options: [dev, sandbox, staging, prod]
         required: true
 
 concurrency:

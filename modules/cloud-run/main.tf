@@ -35,25 +35,25 @@ resource "google_cloud_run_v2_service" "api" {
           cpu    = "1"
           memory = "512Mi"
         }
-        cpu_idle          = true  # CPU only allocated during request handling
-        startup_cpu_boost = true  # faster cold starts
+        cpu_idle          = true # CPU only allocated during request handling
+        startup_cpu_boost = true # faster cold starts
       }
 
       # Secrets injected from Secret Manager by convention:
       # secret name = "${name_prefix}-<key>"
       dynamic "env" {
         for_each = {
-          DB_HOST      = "db-host"
-          DB_PORT      = "db-port"
-          DB_NAME      = "db-name"
-          DB_USER      = "db-user"
-          DB_PASSWORD  = "db-password"
-          FIREBASE_ADMIN_SDK_JSON       = "firebase-admin-sdk-json"
-          FIREBASE_STORAGE_BUCKET       = "firebase-storage-bucket"
-          FIREBASE_PROJECT_ID           = "firebase-project-id"
-          SERVER_KEK_MASTER_KEY         = "server-kek-master-key"
-          CORS_ORIGIN                   = "cors-origin"
-          ADMIN_EMAIL                   = "admin-email"
+          DB_HOST                 = "db-host"
+          DB_PORT                 = "db-port"
+          DB_NAME                 = "db-name"
+          DB_USER                 = "db-user"
+          DB_PASSWORD             = "db-password"
+          FIREBASE_ADMIN_SDK_JSON = "firebase-admin-sdk-json"
+          FIREBASE_STORAGE_BUCKET = "firebase-storage-bucket"
+          FIREBASE_PROJECT_ID     = "firebase-project-id"
+          SERVER_KEK_MASTER_KEY   = "server-kek-master-key"
+          CORS_ORIGIN             = "cors-origin"
+          ADMIN_EMAIL             = "admin-email"
         }
         content {
           name = env.key

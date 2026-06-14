@@ -16,13 +16,13 @@ dependency "networking" {
 }
 
 inputs = {
-  instance_name   = "swpt-mw1-dev-sql-main"
-  vpc_self_link   = dependency.networking.outputs.vpc_self_link
-  db_name         = "sweptlock_db"
-  db_user         = "sweptlock"
-  tier            = "db-g1-small"
-  disk_size_gb    = 20
-  ha_enabled      = false
-  pitr_enabled    = false
+  instance_name       = "swpt-mw1-dev-sql-main"
+  vpc_self_link       = dependency.networking.outputs.vpc_self_link
+  db_name             = "sweptlock_db"
+  db_user             = "sweptlock"
+  tier                = "db-g1-small"
+  disk_size_gb        = 20
+  ha_enabled          = false
+  pitr_enabled        = false
   deletion_protection = false
 }

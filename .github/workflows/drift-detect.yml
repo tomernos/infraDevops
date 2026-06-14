@@ -8,11 +8,11 @@ on:
       environment:
         description: "Environment to check"
         type: choice
-        options: [sandbox, staging, prod]
-        default: sandbox
+        options: [dev, sandbox, staging, prod]
+        default: dev
 
 concurrency:
-  group: drift-${{ inputs.environment || 'sandbox' }}
+  group: drift-${{ inputs.environment || 'dev' }}
   cancel-in-progress: true
 
 jobs:
@@ -26,8 +26,9 @@ jobs:
       - name: "Resolve"
         id: resolve
         run: |
-          ENV="${{ inputs.environment || 'sandbox' }}"
+          ENV="${{ inputs.environment || 'dev' }}"
           case "$ENV" in
+            dev)     PROJECT="sweptlock-dev-844f2" ;;
             sandbox) PROJECT="cryptoshare-e5172" ;;
             staging) PROJECT="sweptlock-staging" ;;
             prod)    PROJECT="sweptlock-prod" ;;

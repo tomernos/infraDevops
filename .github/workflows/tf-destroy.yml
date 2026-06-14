@@ -17,7 +17,7 @@ on:
       environment:
         description: "Environment to destroy"
         type: choice
-        options: [sandbox, staging, prod]
+        options: [dev, sandbox, staging, prod]
         required: true
       confirm:
         description: 'Re-type the environment name to confirm (must match exactly)'
@@ -54,6 +54,7 @@ jobs:
         id: resolve
         run: |
           case "${{ inputs.environment }}" in
+            dev)     PROJECT="sweptlock-dev-844f2" ;;
             sandbox) PROJECT="cryptoshare-e5172" ;;
             staging) PROJECT="sweptlock-staging" ;;
             prod)    PROJECT="sweptlock-prod" ;;

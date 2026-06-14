@@ -52,6 +52,7 @@ jobs:
         id: resolve
         run: |
           case "${{ inputs.environment }}" in
+            dev)     PROJECT="sweptlock-dev-844f2" ;;
             sandbox) PROJECT="cryptoshare-e5172" ;;
             staging) PROJECT="sweptlock-staging" ;;
             prod)    PROJECT="sweptlock-prod" ;;
