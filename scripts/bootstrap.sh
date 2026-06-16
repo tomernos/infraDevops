@@ -95,6 +95,7 @@ section "GCP APIs"
 info "Enabling APIs (may take ~60s on first run)..."
 gcloud services enable \
   compute.googleapis.com \
+  run.googleapis.com \
   sqladmin.googleapis.com \
   servicenetworking.googleapis.com \
   cloudkms.googleapis.com \
@@ -205,8 +206,11 @@ bind_bucket  "$SA_PLAN_EMAIL"  "roles/storage.objectUser"
 # Use granular roles in staging/prod instead of editor.
 bind_project "$SA_APPLY_EMAIL" "roles/editor"
 bind_project "$SA_APPLY_EMAIL" "roles/resourcemanager.projectIamAdmin"
-bind_project "$SA_APPLY_EMAIL" "roles/cloudkms.admin"
-bind_project "$SA_APPLY_EMAIL" "roles/servicenetworking.networksAdmin"
+# editor cannot setIamPolicy on these resource types — grant the service admin role:
+bind_project "$SA_APPLY_EMAIL" "roles/cloudkms.admin"               # KMS key IAM (security)
+bind_project "$SA_APPLY_EMAIL" "roles/servicenetworking.networksAdmin" # VPC peering (networking)
+bind_project "$SA_APPLY_EMAIL" "roles/artifactregistry.admin"       # repo IAM (registry)
+bind_project "$SA_APPLY_EMAIL" "roles/run.admin"                    # service IAM/public-invoker (cloud-run)
 bind_bucket  "$SA_APPLY_EMAIL" "roles/storage.admin"
 
 # Deploy SA: image push + Cloud Run deploy
