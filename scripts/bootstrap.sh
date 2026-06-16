@@ -45,6 +45,13 @@ REGION="me-west1"
 REGION_SHORT="mw1"
 PREFIX="${TENANT}-${REGION_SHORT}-${ENV}"
 
+# sa-api is created by Terraform (security module) and follows the naming
+# convention, so derive it automatically. The deploy SA needs serviceAccountUser
+# (actAs) on it to deploy Cloud Run revisions that run as sa-api. On the FIRST
+# bootstrap (before security applies) the SA won't exist yet — the binding step
+# below is fail-soft and you just re-run bootstrap after the security apply.
+SA_API_EMAIL="${SA_API_EMAIL:-${PREFIX}-sa-api@${PROJECT_ID}.iam.gserviceaccount.com}"
+
 # Matches root.hcl bucket formula: ${tenant}-${region_short}-infra-${env}-tf
 STATE_BUCKET="${TENANT}-${REGION_SHORT}-infra-${ENV}-tf"
 
@@ -220,19 +227,19 @@ for ROLE in \
   bind_project "$SA_DEPLOY_EMAIL" "$ROLE"
 done
 
-# Deploy SA -> serviceAccountUser on sa-api (so Cloud Run can run as sa-api)
-if [[ -n "$SA_API_EMAIL" ]]; then
-  info "ci-deploy -> serviceAccountUser on $SA_API_EMAIL"
+# Deploy SA -> serviceAccountUser on sa-api (so Cloud Run can deploy revisions
+# that run as sa-api). sa-api is Terraform-created; fail-soft if it doesn't exist
+# yet on a first bootstrap — just re-run bootstrap after the security apply.
+info "ci-deploy -> serviceAccountUser on $SA_API_EMAIL"
+if gcloud iam service-accounts describe "$SA_API_EMAIL" --project="$PROJECT_ID" &>/dev/null; then
   gcloud iam service-accounts add-iam-policy-binding "$SA_API_EMAIL" \
     --project="$PROJECT_ID" \
     --role="roles/iam.serviceAccountUser" \
     --member="serviceAccount:${SA_DEPLOY_EMAIL}" --quiet
   ok "ci-deploy -> serviceAccountUser"
 else
-  echo ""
-  echo "  NOTE: sa_api_email not provided — skipping ci-deploy -> sa-api binding."
-  echo "  Re-run after the security module is applied:"
-  echo "    ./scripts/bootstrap.sh ${ENV} <sa_api_email>"
+  echo "  -- $SA_API_EMAIL does not exist yet (apply the security stack first)."
+  echo "     Re-run ./scripts/bootstrap.sh ${ENV} once infra is applied to add this binding."
 fi
 
 # ── 7. WIF principal bindings ─────────────────────────────────────────────────
