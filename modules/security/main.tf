@@ -50,10 +50,13 @@ resource "google_project_iam_member" "migrator_sql_client" {
 #   - Brand-new environment      → comment both import blocks out for the first
 #                                  apply only; uncomment after.
 
-import {
-  id = "projects/${var.project_id}/locations/${var.region}/keyRings/${var.name_prefix}-kms-kr"
-  to = google_kms_key_ring.main
-}
+# FIRST-APPLY(dev): commented out — brand-new project has no KMS ring to import.
+# UNCOMMENT after the first successful apply of this module (restores idempotent
+# re-import for any future destroy/recreate within GCP's 30-day name reservation).
+# import {
+#   id = "projects/${var.project_id}/locations/${var.region}/keyRings/${var.name_prefix}-kms-kr"
+#   to = google_kms_key_ring.main
+# }
 
 resource "google_kms_key_ring" "main" {
   name     = "${var.name_prefix}-kms-kr"
@@ -61,19 +64,21 @@ resource "google_kms_key_ring" "main" {
   project  = var.project_id
 }
 
-import {
-  id = "projects/${var.project_id}/locations/${var.region}/keyRings/${var.name_prefix}-kms-kr/cryptoKeys/${var.name_prefix}-kms-trust-dek"
-  to = google_kms_crypto_key.trust_dek
-}
+# FIRST-APPLY(dev): commented out — see note on the key-ring import above.
+# UNCOMMENT after the first successful apply of this module.
+# import {
+#   id = "projects/${var.project_id}/locations/${var.region}/keyRings/${var.name_prefix}-kms-kr/cryptoKeys/${var.name_prefix}-kms-trust-dek"
+#   to = google_kms_crypto_key.trust_dek
+# }
 
 resource "google_kms_crypto_key" "trust_dek" {
   name            = "${var.name_prefix}-kms-trust-dek"
   key_ring        = google_kms_key_ring.main.id
-  rotation_period = "7776000s"  # 90 days
+  rotation_period = "7776000s" # 90 days
 
   version_template {
     algorithm        = "GOOGLE_SYMMETRIC_ENCRYPTION"
-    protection_level = "SOFTWARE"  # upgrade to HSM in prod
+    protection_level = "SOFTWARE" # upgrade to HSM in prod
   }
 
   lifecycle {
@@ -102,13 +107,13 @@ locals {
     "firebase-admin-sdk-json",
     "cors-origin",
     "admin-email",
-    "server-kek-master-key",      # Phase 1: env-var based; Phase 2: replace with Cloud KMS
+    "server-kek-master-key", # Phase 1: env-var based; Phase 2: replace with Cloud KMS
     # Platform-api secrets
-    "platform-db-user",           # read-only postgres user for platform-api
+    "platform-db-user", # read-only postgres user for platform-api
     "platform-db-password",
-    "platform-private-ip",        # PRIVATE_BIND_IP: Tailscale/WireGuard/VPC IP — set at deploy time
-    "platform-cors-origins",      # space-separated origin list for platform-api CORS
-    "firebase-project-id",        # shared with platform-api
+    "platform-private-ip",   # PRIVATE_BIND_IP: Tailscale/WireGuard/VPC IP — set at deploy time
+    "platform-cors-origins", # space-separated origin list for platform-api CORS
+    "firebase-project-id",   # shared with platform-api
   ])
 }
 
@@ -122,7 +127,7 @@ resource "google_secret_manager_secret" "secrets" {
   }
 
   labels = {
-    env    = split("-", var.name_prefix)[2]  # extracts "sandbox" from "swpt-mw1-sandbox"
+    env    = split("-", var.name_prefix)[2] # extracts "sandbox" from "swpt-mw1-sandbox"
     tenant = split("-", var.name_prefix)[0]
   }
 }
