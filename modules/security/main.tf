@@ -50,13 +50,10 @@ resource "google_project_iam_member" "migrator_sql_client" {
 #   - Brand-new environment      → comment both import blocks out for the first
 #                                  apply only; uncomment after.
 
-# FIRST-APPLY(dev): commented out — brand-new project has no KMS ring to import.
-# UNCOMMENT after the first successful apply of this module (restores idempotent
-# re-import for any future destroy/recreate within GCP's 30-day name reservation).
-# import {
-#   id = "projects/${var.project_id}/locations/${var.region}/keyRings/${var.name_prefix}-kms-kr"
-#   to = google_kms_key_ring.main
-# }
+import {
+  id = "projects/${var.project_id}/locations/${var.region}/keyRings/${var.name_prefix}-kms-kr"
+  to = google_kms_key_ring.main
+}
 
 resource "google_kms_key_ring" "main" {
   name     = "${var.name_prefix}-kms-kr"
@@ -64,12 +61,10 @@ resource "google_kms_key_ring" "main" {
   project  = var.project_id
 }
 
-# FIRST-APPLY(dev): commented out — see note on the key-ring import above.
-# UNCOMMENT after the first successful apply of this module.
-# import {
-#   id = "projects/${var.project_id}/locations/${var.region}/keyRings/${var.name_prefix}-kms-kr/cryptoKeys/${var.name_prefix}-kms-trust-dek"
-#   to = google_kms_crypto_key.trust_dek
-# }
+import {
+  id = "projects/${var.project_id}/locations/${var.region}/keyRings/${var.name_prefix}-kms-kr/cryptoKeys/${var.name_prefix}-kms-trust-dek"
+  to = google_kms_crypto_key.trust_dek
+}
 
 resource "google_kms_crypto_key" "trust_dek" {
   name            = "${var.name_prefix}-kms-trust-dek"

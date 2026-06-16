@@ -71,10 +71,8 @@ resource "google_cloud_run_v2_service" "api" {
         value = "production"
       }
 
-      env {
-        name  = "PORT"
-        value = "4000"
-      }
+      # NOTE: do NOT set PORT — Cloud Run reserves it and injects it automatically
+      # from ports.container_port (4000 below). Setting it fails with HTTP 400.
     }
   }
 
