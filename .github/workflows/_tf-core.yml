@@ -168,6 +168,8 @@ jobs:
       has_changes: ${{ steps.build.outputs.has_changes }}
       has_destroys: ${{ steps.build.outputs.has_destroys }}
     permissions:
+      contents: read          # required for actions/checkout — omitting it makes the
+                              # token's contents scope `none`, so checkout 404s the repo
       pull-requests: write
     steps:
       - uses: actions/checkout@v4
