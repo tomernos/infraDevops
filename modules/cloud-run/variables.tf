@@ -7,11 +7,6 @@ variable "sa_api_email" {
   description = "Service account the Cloud Run container runs as"
 }
 
-variable "sa_ci_deploy_email" {
-  type        = string
-  description = "CI service account that deploys new revisions — granted roles/run.developer"
-}
-
 variable "vpc_self_link" {
   type        = string
   description = "VPC network self_link for Direct VPC Egress"

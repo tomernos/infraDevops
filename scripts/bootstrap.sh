@@ -198,10 +198,15 @@ bind_bucket() {
 bind_project "$SA_PLAN_EMAIL"  "roles/viewer"
 bind_bucket  "$SA_PLAN_EMAIL"  "roles/storage.objectUser"
 
-# Apply SA: editor + IAM admin + state full access
-# Use granular roles in staging/prod instead of editor
+# Apply SA: editor + IAM admin + state full access.
+# editor does NOT cover two things our modules need, so grant them explicitly:
+#   - cloudkms.admin             → set IAM policy on the KMS trust-DEK key (security module)
+#   - servicenetworking.networksAdmin → create the private services VPC peering (networking module)
+# Use granular roles in staging/prod instead of editor.
 bind_project "$SA_APPLY_EMAIL" "roles/editor"
 bind_project "$SA_APPLY_EMAIL" "roles/resourcemanager.projectIamAdmin"
+bind_project "$SA_APPLY_EMAIL" "roles/cloudkms.admin"
+bind_project "$SA_APPLY_EMAIL" "roles/servicenetworking.networksAdmin"
 bind_bucket  "$SA_APPLY_EMAIL" "roles/storage.admin"
 
 # Deploy SA: image push + Cloud Run deploy

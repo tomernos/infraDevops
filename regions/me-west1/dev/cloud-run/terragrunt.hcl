@@ -23,19 +23,10 @@ dependency "networking" {
   mock_outputs_allowed_terraform_commands = ["init", "validate", "plan", "destroy"]
 }
 
-dependency "workload_identity" {
-  config_path = "../workload-identity"
-  mock_outputs = {
-    sa_ci_deploy_email = "mock-ci@mock-project.iam.gserviceaccount.com"
-  }
-  mock_outputs_allowed_terraform_commands = ["init", "validate", "plan", "destroy"]
-}
-
 inputs = {
-  name_prefix        = "swpt-mw1-dev"
-  sa_api_email       = dependency.security.outputs.sa_api_email
-  sa_ci_deploy_email = dependency.workload_identity.outputs.sa_ci_deploy_email
-  vpc_self_link      = dependency.networking.outputs.vpc_self_link
-  subnet_self_link   = dependency.networking.outputs.subnet_self_link
-  max_instances      = 3
+  name_prefix      = "swpt-mw1-dev"
+  sa_api_email     = dependency.security.outputs.sa_api_email
+  vpc_self_link    = dependency.networking.outputs.vpc_self_link
+  subnet_self_link = dependency.networking.outputs.subnet_self_link
+  max_instances    = 3
 }

@@ -99,9 +99,6 @@ resource "google_cloud_run_v2_service_iam_member" "public_invoker" {
   member   = "allUsers"
 }
 
-# ── CI SA: deploy new revisions ──────────────────────────────────────────────
-resource "google_project_iam_member" "ci_run_developer" {
-  project = var.project_id
-  role    = "roles/run.developer"
-  member  = "serviceAccount:${var.sa_ci_deploy_email}"
-}
+# NOTE: the CI deploy SA's roles/run.developer grant is owned by scripts/bootstrap.sh
+# (which must create the CI identity out-of-band anyway). It is intentionally NOT
+# managed here to avoid duplicating identity ownership across bootstrap + Terraform.
