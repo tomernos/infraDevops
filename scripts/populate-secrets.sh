@@ -42,16 +42,23 @@ KEK="$(read_from_file "$ENV_FILE" SERVER_KEK_MASTER_KEY)"
 ADMIN_EMAIL="$(read_from_file "$ENV_FILE" ADMIN_EMAIL)"
 CORS_ORIGIN="${CORS_ORIGIN:-*}"
 
-# ── Read DB outputs from Terraform ────────────────────────────────────────────
-echo ">>> Reading Cloud SQL outputs from Terraform..."
+# ── Read DB connection details (no local terragrunt needed) ───────────────────
+# Applies run in CI, so local terragrunt state plumbing is unreliable. Read the
+# private IP straight from the Cloud SQL API, and the generated password straight
+# from the Terraform state object in GCS. Both only need gcloud auth as an Owner.
+echo ">>> Reading Cloud SQL connection details..."
 ENV="${ENV:-dev}"
-DB_HOST=$(cd "$INFRA_DIR/regions/me-west1/${ENV}/database" \
-  && terragrunt output -raw private_ip 2>/dev/null) || DB_HOST=""
-DB_PASSWORD=$(cd "$INFRA_DIR/regions/me-west1/${ENV}/database" \
-  && terragrunt output -raw db_password 2>/dev/null) || DB_PASSWORD=""
+REGION_SHORT="mw1"
+SQL_INSTANCE="${PREFIX}-sql-main"
+DB_STATE="gs://swpt-${REGION_SHORT}-infra-${ENV}-tf/regions/me-west1/${ENV}/database/default.tfstate"
 
-[[ -n "$DB_HOST" ]]     || { echo "ERROR: Could not read private_ip from database output. Run 'terragrunt apply' in database stack first."; exit 1; }
-[[ -n "$DB_PASSWORD" ]] || { echo "ERROR: Could not read db_password from database output."; exit 1; }
+DB_HOST=$(gcloud sql instances describe "$SQL_INSTANCE" --project="$PROJECT_ID" --format="json(ipAddresses)" 2>/dev/null \
+  | jq -r '.ipAddresses[] | select(.type=="PRIVATE") | .ipAddress' 2>/dev/null) || DB_HOST=""
+DB_PASSWORD=$(gcloud storage cat "$DB_STATE" 2>/dev/null \
+  | jq -r '.resources[] | select(.type=="random_password") | .instances[0].attributes.result' 2>/dev/null) || DB_PASSWORD=""
+
+[[ -n "$DB_HOST" ]]     || { echo "ERROR: could not read PRIVATE IP for $SQL_INSTANCE (is the DB applied?)"; exit 1; }
+[[ -n "$DB_PASSWORD" ]] || { echo "ERROR: could not read db password from $DB_STATE"; exit 1; }
 
 DB_PORT="5432"
 DB_NAME="sweptlock_db"
