@@ -7,14 +7,14 @@ variable "sa_api_email" {
   description = "Service account the Cloud Run container runs as"
 }
 
-variable "vpc_self_link" {
+variable "vpc_network" {
   type        = string
-  description = "VPC network self_link for Direct VPC Egress"
+  description = "VPC network resource path (projects/*/global/networks/*) for Direct VPC Egress. Cloud Run V2 rejects a full self_link URL here."
 }
 
-variable "subnet_self_link" {
+variable "subnetwork" {
   type        = string
-  description = "Subnet self_link for Direct VPC Egress (Cloud Run gets IPs from this range)"
+  description = "Subnet resource path (projects/*/regions/*/subnetworks/*) for Direct VPC Egress"
 }
 
 variable "max_instances" {

@@ -17,8 +17,8 @@ resource "google_cloud_run_v2_service" "api" {
     # reach Cloud SQL's private IP without a Serverless VPC Access connector.
     vpc_access {
       network_interfaces {
-        network    = var.vpc_self_link
-        subnetwork = var.subnet_self_link
+        network    = var.vpc_network
+        subnetwork = var.subnetwork
       }
       egress = "PRIVATE_RANGES_ONLY"
     }
