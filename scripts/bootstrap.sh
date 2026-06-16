@@ -190,9 +190,13 @@ bind_bucket() {
     --member="serviceAccount:$1" --role="$2" --quiet
 }
 
-# Plan SA: viewer + state reader
+# Plan SA: read-only on the project (roles/viewer) but needs to read state AND
+# acquire the GCS state lock during plan. Terraform/terragrunt writes a .tflock
+# object even for `plan` and dependency `terraform output`, so objectViewer is
+# not enough — objectUser grants get/list + create/delete (lock), nothing more.
+# The SA stays roles/viewer on the project, so it still cannot mutate real infra.
 bind_project "$SA_PLAN_EMAIL"  "roles/viewer"
-bind_bucket  "$SA_PLAN_EMAIL"  "roles/storage.objectViewer"
+bind_bucket  "$SA_PLAN_EMAIL"  "roles/storage.objectUser"
 
 # Apply SA: editor + IAM admin + state full access
 # Use granular roles in staging/prod instead of editor
