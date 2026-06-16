@@ -56,10 +56,14 @@ SA_PLAN="${PREFIX}-sa-ci-tf-plan"
 SA_APPLY="${PREFIX}-sa-tf-apply"
 SA_DEPLOY="${PREFIX}-sa-ci-deploy"
 
-GITHUB_OWNER="tomernos"
-APP_GITHUB_OWNER="sweptlock"
+# GitHub owner/repo names — MUST match the exact case GitHub emits in OIDC claims,
+# because WIF principalSet bindings are exact-string matches.
+# Infra CI repo of record: SweptLock/Sweptlock-Infra (private). The public
+# tomernos/infraDevops mirror is NOT the CI repo and is not authorized here.
+GITHUB_OWNER="SweptLock"
+APP_GITHUB_OWNER="SweptLock"
 APP_REPO="sweptlock-engine"
-INFRA_REPO="infraDevops"
+INFRA_REPO="Sweptlock-Infra"
 
 SA_PLAN_EMAIL="${SA_PLAN}@${PROJECT_ID}.iam.gserviceaccount.com"
 SA_APPLY_EMAIL="${SA_APPLY}@${PROJECT_ID}.iam.gserviceaccount.com"
