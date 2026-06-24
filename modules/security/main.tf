@@ -39,6 +39,18 @@ resource "google_project_iam_member" "migrator_sql_client" {
   member  = "serviceAccount:${google_service_account.sa_migrator.email}"
 }
 
+# The CI Terraform-apply SA (created out-of-band by bootstrap.sh) manages service accounts AND
+# their resource-level IAM (e.g. the ci-runner module's serviceAccountUser binding on sa-runner).
+# Its bootstrap roles — roles/editor + roles/resourcemanager.projectIamAdmin — cover SA *creation*
+# and *project*-level IAM, but NOT *service-account-resource*-level setIamPolicy, which only
+# roles/iam.serviceAccountAdmin grants. Managed here (additive; the apply SA's projectIamAdmin lets
+# it set this) so SA-level IAM stays fully in Terraform rather than a manual gcloud grant.
+resource "google_project_iam_member" "tf_apply_sa_admin" {
+  project = var.project_id
+  role    = "roles/iam.serviceAccountAdmin"
+  member  = "serviceAccount:${var.name_prefix}-sa-tf-apply@${var.project_id}.iam.gserviceaccount.com"
+}
+
 # ── KMS ───────────────────────────────────────────────────────────────────────
 #
 # GCP KMS KeyRings cannot be truly deleted — GCP soft-deletes them and reserves
