@@ -20,7 +20,14 @@ resource "google_cloud_run_v2_service" "api" {
         network    = var.vpc_network
         subnetwork = var.subnetwork
       }
-      egress = "PRIVATE_RANGES_ONLY"
+      # ALL_TRAFFIC (not PRIVATE_RANGES_ONLY): route ALL egress — including public Google APIs
+      # (Firebase Admin token + Identity Toolkit) — through the VPC and out via Cloud NAT.
+      # With PRIVATE_RANGES_ONLY, public traffic took Cloud Run's default path, which failed to
+      # reach www.googleapis.com/oauth2/v4/token ("Premature close") → Firebase getUserByEmail()
+      # threw app/invalid-credential → /auth/check-user 500 → returning users bounced to signup.
+      # NAT (ALL_SUBNETWORKS_ALL_IP_RANGES) gives Google calls a clean, observable egress road.
+      # See NETWORKING.md.
+      egress = "ALL_TRAFFIC"
     }
 
     containers {
