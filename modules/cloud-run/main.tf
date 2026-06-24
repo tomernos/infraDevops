@@ -26,7 +26,7 @@ resource "google_cloud_run_v2_service" "api" {
       # reach www.googleapis.com/oauth2/v4/token ("Premature close") → Firebase getUserByEmail()
       # threw app/invalid-credential → /auth/check-user 500 → returning users bounced to signup.
       # NAT (ALL_SUBNETWORKS_ALL_IP_RANGES) gives Google calls a clean, observable egress road.
-      # See NETWORKING.md.
+      # Network reference: ReferencesContext/sweptlock/wiki/networking.md
       egress = "ALL_TRAFFIC"
     }
 

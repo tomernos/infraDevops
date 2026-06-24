@@ -28,3 +28,6 @@ terraformlogerror.txt
 terraform-deploy.yaml
 terraform-plan-apply.yml
 workflowerror.md
+# Docs live in ReferencesContext, not in the code repo
+CLAUDE.md
+NETWORKING.md
