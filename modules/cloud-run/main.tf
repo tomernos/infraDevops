@@ -1,4 +1,12 @@
 # ── API Cloud Run service ────────────────────────────────────────────────────
+
+locals {
+  # Cloud SQL Auth Proxy connection name + the unix-socket host pg connects to. Bypasses the
+  # VPC/PSA private-IP path (unreliable via Direct VPC Egress — recurring ETIMEDOUT).
+  cloudsql_instance = "${var.project_id}:${var.region}:${var.name_prefix}-sql-main"
+  db_socket_host    = "/cloudsql/${local.cloudsql_instance}"
+}
+
 resource "google_cloud_run_v2_service" "api" {
   name     = "${var.name_prefix}-api"
   location = var.region
@@ -30,6 +38,16 @@ resource "google_cloud_run_v2_service" "api" {
       egress = "ALL_TRAFFIC"
     }
 
+    # Cloud SQL Auth Proxy socket — mounted into the container at /cloudsql/<connection-name>.
+    # Connects over the Cloud SQL Admin API tunnel (needs roles/cloudsql.client on sa-api), not
+    # the VPC/private IP — this is what makes the DB connection reliable.
+    volumes {
+      name = "cloudsql"
+      cloud_sql_instance {
+        instances = [local.cloudsql_instance]
+      }
+    }
+
     containers {
       image = var.image_url
 
@@ -50,7 +68,6 @@ resource "google_cloud_run_v2_service" "api" {
       # secret name = "${name_prefix}-<key>"
       dynamic "env" {
         for_each = {
-          DB_HOST                 = "db-host"
           DB_PORT                 = "db-port"
           DB_NAME                 = "db-name"
           DB_USER                 = "db-user"
@@ -76,6 +93,18 @@ resource "google_cloud_run_v2_service" "api" {
       env {
         name  = "NODE_ENV"
         value = "production"
+      }
+
+      # DB_HOST is the Cloud SQL Auth Proxy unix-socket path (not the private IP). pg treats a
+      # host starting with "/" as a socket directory. Backed by the cloud_sql_instance volume.
+      env {
+        name  = "DB_HOST"
+        value = local.db_socket_host
+      }
+
+      volume_mounts {
+        name       = "cloudsql"
+        mount_path = "/cloudsql"
       }
 
       # Trust-plan root key. When set, the backend wraps per-owner KEKs via Cloud KMS
