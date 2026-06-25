@@ -28,3 +28,9 @@ variable "image_url" {
   default     = "us-docker.pkg.dev/cloudrun/container/hello:latest"
   description = "Initial image — CI overwrites this on every deploy (ignored in TF state)"
 }
+
+variable "kek_kms_key" {
+  type        = string
+  default     = ""
+  description = "Cloud KMS crypto-key resource name for trust-plan KEK wrapping (gcp_kms provider). Empty = backend falls back to the local SERVER_KEK_MASTER_KEY."
+}

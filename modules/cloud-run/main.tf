@@ -78,6 +78,18 @@ resource "google_cloud_run_v2_service" "api" {
         value = "production"
       }
 
+      # Trust-plan root key. When set, the backend wraps per-owner KEKs via Cloud KMS
+      # (gcp_kms provider — root key non-extractable, audited, rotatable) instead of the
+      # local SERVER_KEK_MASTER_KEY. Non-secret: a KMS crypto-key resource name, not key
+      # material. Access is via the runtime SA's cryptoKeyEncrypterDecrypter binding.
+      dynamic "env" {
+        for_each = var.kek_kms_key != "" ? { SERVER_KEK_KMS_KEY = var.kek_kms_key } : {}
+        content {
+          name  = env.key
+          value = env.value
+        }
+      }
+
       # NOTE: do NOT set PORT — Cloud Run reserves it and injects it automatically
       # from ports.container_port (4000 below). Setting it fails with HTTP 400.
     }
