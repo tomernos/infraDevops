@@ -9,7 +9,8 @@ terraform {
 dependency "security" {
   config_path = "../security"
   mock_outputs = {
-    sa_api_email = "mock-sa@mock-project.iam.gserviceaccount.com"
+    sa_api_email     = "mock-sa@mock-project.iam.gserviceaccount.com"
+    kms_trust_dek_id = "projects/mock/locations/me-west1/keyRings/mock-kr/cryptoKeys/mock-key"
   }
   mock_outputs_allowed_terraform_commands = ["init", "validate", "plan", "destroy"]
 }
@@ -29,4 +30,5 @@ inputs = {
   vpc_network   = dependency.networking.outputs.vpc_id
   subnetwork    = dependency.networking.outputs.subnet_id
   max_instances = 3
+  kek_kms_key   = dependency.security.outputs.kms_trust_dek_id
 }
