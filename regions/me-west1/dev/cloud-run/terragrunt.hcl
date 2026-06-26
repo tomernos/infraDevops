@@ -14,6 +14,10 @@ dependency "security" {
     kms_sign_hmac_version_id = "projects/mock/locations/me-west1/keyRings/mock-kr/cryptoKeys/mock-mac/cryptoKeyVersions/1"
   }
   mock_outputs_allowed_terraform_commands = ["init", "validate", "plan", "destroy"]
+  # security is already applied (real state), but its NEW output kms_sign_hmac_version_id isn't
+  # applied yet — merge the mock for that missing key during plan (apply uses the real value,
+  # since security applies before this stack via the dependency edge).
+  mock_outputs_merge_strategy_with_state = "shallow"
 }
 
 dependency "networking" {
