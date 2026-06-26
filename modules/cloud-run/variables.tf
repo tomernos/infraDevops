@@ -34,3 +34,9 @@ variable "kek_kms_key" {
   default     = ""
   description = "Cloud KMS crypto-key resource name for trust-plan KEK wrapping (gcp_kms provider). Empty = backend falls back to the local SERVER_KEK_MASTER_KEY."
 }
+
+variable "sign_hmac_kms_key" {
+  type        = string
+  default     = ""
+  description = "Cloud KMS CryptoKeyVersion resource name for pdf_sign_events MAC (MacSign/MacVerify). Empty = backend falls back to local HMAC with SERVER_KEK_MASTER_KEY."
+}

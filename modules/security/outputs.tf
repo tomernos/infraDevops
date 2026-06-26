@@ -1,7 +1,12 @@
-output "sa_api_email"      { value = google_service_account.sa_api.email }
+output "sa_api_email" { value = google_service_account.sa_api.email }
 output "sa_migrator_email" { value = google_service_account.sa_migrator.email }
-output "kms_key_ring_id"   { value = google_kms_key_ring.main.id }
-output "kms_trust_dek_id"  { value = google_kms_crypto_key.trust_dek.id }
+output "kms_key_ring_id" { value = google_kms_key_ring.main.id }
+output "kms_trust_dek_id" { value = google_kms_crypto_key.trust_dek.id }
+
+# CryptoKeyVersion resource name — KMS MacSign/MacVerify operate on a specific version.
+output "kms_sign_hmac_version_id" {
+  value = "${google_kms_crypto_key.sign_hmac.id}/cryptoKeyVersions/1"
+}
 
 output "secret_names" {
   value       = { for k, v in google_secret_manager_secret.secrets : k => v.name }

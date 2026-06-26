@@ -90,6 +90,16 @@ resource "google_cloud_run_v2_service" "api" {
         }
       }
 
+      # KMS MAC key version for pdf_sign_events seals (MacSign/MacVerify). Non-secret resource name.
+      # Access via the runtime SA's cloudkms.signerVerifier binding. See trust-plan-kms.md.
+      dynamic "env" {
+        for_each = var.sign_hmac_kms_key != "" ? { SERVER_SIGN_HMAC_KMS_KEY = var.sign_hmac_kms_key } : {}
+        content {
+          name  = env.key
+          value = env.value
+        }
+      }
+
       # NOTE: do NOT set PORT — Cloud Run reserves it and injects it automatically
       # from ports.container_port (4000 below). Setting it fails with HTTP 400.
     }
