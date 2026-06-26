@@ -100,6 +100,34 @@ resource "google_kms_crypto_key_iam_member" "api_kms" {
   member        = "serviceAccount:${google_service_account.sa_api.email}"
 }
 
+# ── KMS MAC key — seals pdf_sign_events HMACs via KMS MacSign/MacVerify ───────
+# Separate MAC-purpose key (the trust_dek above is ENCRYPT_DECRYPT and cannot MAC). The HMAC
+# key never leaves KMS, so an app/DB compromise can't forge a signing-event seal.
+# Single non-rotating version (rotation would need per-row version tracking — see backend
+# signingEventService.js). If this key is ever destroyed + re-applied within KMS's 30-day name
+# reservation, add an `import` block like trust_dek above.
+resource "google_kms_crypto_key" "sign_hmac" {
+  name     = "${var.name_prefix}-kms-sign-hmac"
+  key_ring = google_kms_key_ring.main.id
+  purpose  = "MAC"
+
+  version_template {
+    algorithm        = "HMAC_SHA256"
+    protection_level = "SOFTWARE" # upgrade to HSM in prod
+  }
+
+  lifecycle {
+    prevent_destroy = false
+  }
+}
+
+# sa-api can MacSign/MacVerify with this key
+resource "google_kms_crypto_key_iam_member" "api_sign_hmac" {
+  crypto_key_id = google_kms_crypto_key.sign_hmac.id
+  role          = "roles/cloudkms.signerVerifier"
+  member        = "serviceAccount:${google_service_account.sa_api.email}"
+}
+
 # ── Secret Manager — skeleton secrets (values populated after apply) ──────────
 
 locals {
