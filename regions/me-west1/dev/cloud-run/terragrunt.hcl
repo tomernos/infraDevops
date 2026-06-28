@@ -37,4 +37,10 @@ inputs = {
   max_instances     = 3
   kek_kms_key       = dependency.security.outputs.kms_trust_dek_id
   sign_hmac_kms_key = dependency.security.outputs.kms_sign_hmac_version_id
+
+  # Stage B: wire the dev-only local Platform CA. The two PEM secrets (populated out-of-band in
+  # Stage A) inject as PLATFORM_CA_CERT_PEM / PLATFORM_CA_KEY_PEM via secret_key_ref:latest.
+  app_env        = "dev"
+  ca_provider    = "local"
+  allow_local_ca = true
 }

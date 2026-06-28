@@ -1,3 +1,20 @@
+locals {
+  # Non-secret Platform CA guardrail env — injected only when a provider is selected. The backend's
+  # caProvider.js reads ALLOW_LOCAL_CA as the literal string "true", hence the bool→string coercion.
+  ca_env = var.ca_provider != "" ? {
+    APP_ENV        = var.app_env
+    CA_PROVIDER    = var.ca_provider
+    ALLOW_LOCAL_CA = var.allow_local_ca ? "true" : "false"
+  } : {}
+
+  # Secret-backed CA material — only the local provider needs the extractable cert+key (dev only).
+  # gcp_cas (future) issues via the API and needs no PEM secrets here.
+  ca_secret_env = var.ca_provider == "local" ? {
+    PLATFORM_CA_CERT_PEM = "platform-ca-cert-pem"
+    PLATFORM_CA_KEY_PEM  = "platform-ca-key-pem"
+  } : {}
+}
+
 # ── API Cloud Run service ────────────────────────────────────────────────────
 resource "google_cloud_run_v2_service" "api" {
   name     = "${var.name_prefix}-api"
@@ -100,6 +117,30 @@ resource "google_cloud_run_v2_service" "api" {
         }
       }
 
+      # Platform CA guardrail env (non-secret). Only present when ca_provider is set (dev).
+      dynamic "env" {
+        for_each = local.ca_env
+        content {
+          name  = env.key
+          value = env.value
+        }
+      }
+
+      # Platform CA material from Secret Manager — only for the local provider (dev). Same
+      # secret_key_ref:latest pattern as the core secrets above; never read via a TF data source.
+      dynamic "env" {
+        for_each = local.ca_secret_env
+        content {
+          name = env.key
+          value_source {
+            secret_key_ref {
+              secret  = "${var.name_prefix}-${env.value}"
+              version = "latest"
+            }
+          }
+        }
+      }
+
       # NOTE: do NOT set PORT — Cloud Run reserves it and injects it automatically
       # from ports.container_port (4000 below). Setting it fails with HTTP 400.
     }
@@ -114,6 +155,17 @@ resource "google_cloud_run_v2_service" "api" {
   # All other template settings (env vars, scaling, vpc) are still managed by Terraform.
   lifecycle {
     ignore_changes = [template[0].containers[0].image]
+
+    # Mirror backend caProvider.js guardrails at the deploy boundary (fail-closed):
+    # the extractable local CA is only ever permitted in dev with an explicit opt-in.
+    precondition {
+      condition     = !var.allow_local_ca || (var.app_env == "dev" && var.ca_provider == "local")
+      error_message = "allow_local_ca=true requires app_env=\"dev\" and ca_provider=\"local\"."
+    }
+    precondition {
+      condition     = var.ca_provider != "local" || var.app_env == "dev"
+      error_message = "ca_provider=\"local\" is permitted only when app_env=\"dev\"."
+    }
   }
 }
 

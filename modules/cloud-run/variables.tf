@@ -40,3 +40,25 @@ variable "sign_hmac_kms_key" {
   default     = ""
   description = "Cloud KMS CryptoKeyVersion resource name for pdf_sign_events MAC (MacSign/MacVerify). Empty = backend falls back to local HMAC with SERVER_KEK_MASTER_KEY."
 }
+
+# ── Platform CA (dev-only) ───────────────────────────────────────────────────
+# Opt-in, inert by default. Empty ca_provider leaves all Platform CA wiring off, so the shared
+# module stays safe for non-dev services. The runtime guardrails in backend caProvider.js are
+# duplicated as a Cloud Run lifecycle precondition (see main.tf) — fail-closed at the deploy boundary.
+variable "app_env" {
+  type        = string
+  default     = ""
+  description = "Application deployment environment consumed by runtime security guardrails (e.g. dev). Empty leaves APP_ENV unset."
+}
+
+variable "ca_provider" {
+  type        = string
+  default     = ""
+  description = "Platform CA provider (local | gcp_cas). Empty leaves all Platform CA wiring disabled."
+}
+
+variable "allow_local_ca" {
+  type        = bool
+  default     = false
+  description = "Explicit dev-only opt-in for an extractable local Platform CA. Rejected unless app_env=dev and ca_provider=local."
+}
