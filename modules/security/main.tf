@@ -131,7 +131,11 @@ resource "google_kms_crypto_key_iam_member" "api_sign_hmac" {
 # ── Secret Manager — skeleton secrets (values populated after apply) ──────────
 
 locals {
-  secret_ids = toset([
+  # Dev-only Platform CA secret CONTAINERS (opt-in). Values are populated out-of-band via the
+  # secret-population runbook — NEVER a Terraform secret-version, so no PEM ever enters TF state.
+  ca_secret_ids = var.enable_local_platform_ca_secrets ? ["platform-ca-cert-pem", "platform-ca-key-pem"] : []
+
+  secret_ids = toset(concat([
     # Main backend secrets
     "db-host",
     "db-port",
@@ -149,7 +153,7 @@ locals {
     "platform-private-ip",   # PRIVATE_BIND_IP: Tailscale/WireGuard/VPC IP — set at deploy time
     "platform-cors-origins", # space-separated origin list for platform-api CORS
     "firebase-project-id",   # shared with platform-api
-  ])
+  ], local.ca_secret_ids))
 }
 
 resource "google_secret_manager_secret" "secrets" {

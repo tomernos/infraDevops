@@ -12,4 +12,7 @@ terraform {
 
 inputs = {
   name_prefix = "swpt-mw1-dev"
+  # Stage A: create dev-only Platform CA secret containers. Versions are populated via the runbook
+  # (out-of-band). Enabled only in dev — sandbox/other envs keep the default (false).
+  enable_local_platform_ca_secrets = true
 }
