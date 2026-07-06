@@ -2,13 +2,17 @@
 # scripts/bootstrap.sh
 #
 # One-time bootstrap per environment — run by a human admin before the pipeline.
-# Creates everything the Terraform CI/CD pipeline needs to authenticate to GCP:
+# Creates ONLY the auth plumbing Terraform itself needs to run, and which therefore cannot be
+# Terraform-managed without a lock-yourself-out cycle:
 #   - GCS state bucket + versioning
 #   - Required GCP APIs
-#   - Workload Identity Federation pool + GitHub OIDC provider
-#   - CI service accounts (plan, apply, deploy)
-#   - IAM role bindings
-#   - WIF principal bindings
+#   - Workload Identity Federation pool + GitHub OIDC provider   (TF federates THROUGH these)
+#   - Terraform-runner SAs: sa-tf-plan (read-only PRs) + sa-tf-apply (merge-to-main)
+#   - Their IAM role + WIF principal bindings
+#
+# NOT here: the per-component DEPLOY service accounts (engine, platform). Those are leaf workload
+# identities applied BY sa-tf-apply and live in Terraform — modules/ci-identity (regions/<r>/<env>/
+# ci-identity). Emails come from `terragrunt output` there, not from this script.
 #
 # Nothing here is managed by Terraform. No imports. No state conflicts.
 # Idempotent — safe to re-run.
@@ -20,16 +24,10 @@
 #   ./scripts/bootstrap.sh sandbox
 #   ./scripts/bootstrap.sh staging
 #   ./scripts/bootstrap.sh prod
-#   ./scripts/bootstrap.sh sandbox <sa_api_email>
-#
-# sa_api_email: email of the app API SA (output of security module).
-# Needed so ci-deploy can SSH to VMs running as sa-api.
-# Omit on first run — re-run with it once the security module is applied.
 
 set -euo pipefail
 
-ENV="${1:?Usage: ./scripts/bootstrap.sh <env> [sa_api_email]}"
-SA_API_EMAIL="${2:-}"
+ENV="${1:?Usage: ./scripts/bootstrap.sh <env>}"
 
 # ── Per-environment config ────────────────────────────────────────────────────
 
@@ -45,13 +43,6 @@ REGION="me-west1"
 REGION_SHORT="mw1"
 PREFIX="${TENANT}-${REGION_SHORT}-${ENV}"
 
-# sa-api is created by Terraform (security module) and follows the naming
-# convention, so derive it automatically. The deploy SA needs serviceAccountUser
-# (actAs) on it to deploy Cloud Run revisions that run as sa-api. On the FIRST
-# bootstrap (before security applies) the SA won't exist yet — the binding step
-# below is fail-soft and you just re-run bootstrap after the security apply.
-SA_API_EMAIL="${SA_API_EMAIL:-${PREFIX}-sa-api@${PROJECT_ID}.iam.gserviceaccount.com}"
-
 # Matches root.hcl bucket formula: ${tenant}-${region_short}-infra-${env}-tf
 STATE_BUCKET="${TENANT}-${REGION_SHORT}-infra-${ENV}-tf"
 
@@ -59,22 +50,24 @@ STATE_BUCKET="${TENANT}-${REGION_SHORT}-infra-${ENV}-tf"
 WIF_POOL="${PREFIX}-wif-pool"
 WIF_PROVIDER_ID="github"
 
+# NOTE: plan SA keeps the -sa-ci-tf-plan id for now. Normalizing it to -sa-tf-plan (to match
+# -sa-tf-apply) would rotate the infra repo's own CI secrets across 5 workflows — tracked as a
+# separate follow-up, not bundled into the deploy-SA migration.
 SA_PLAN="${PREFIX}-sa-ci-tf-plan"
 SA_APPLY="${PREFIX}-sa-tf-apply"
-SA_DEPLOY="${PREFIX}-sa-ci-deploy"
 
 # GitHub owner/repo names — MUST match the exact case GitHub emits in OIDC claims,
 # because WIF principalSet bindings are exact-string matches.
 # Infra CI repo of record: SweptLock/Sweptlock-Infra (private). The public
 # tomernos/infraDevops mirror is NOT the CI repo and is not authorized here.
+# APP_GITHUB_OWNER stays here only to widen the provider attribute-condition to the app owner;
+# the per-repo deploy bindings (engine, platform) are Terraform-managed in modules/ci-identity.
 GITHUB_OWNER="SweptLock"
 APP_GITHUB_OWNER="SweptLock"
-APP_REPO="sweptlock-engine"
 INFRA_REPO="Sweptlock-Infra"
 
 SA_PLAN_EMAIL="${SA_PLAN}@${PROJECT_ID}.iam.gserviceaccount.com"
 SA_APPLY_EMAIL="${SA_APPLY}@${PROJECT_ID}.iam.gserviceaccount.com"
-SA_DEPLOY_EMAIL="${SA_DEPLOY}@${PROJECT_ID}.iam.gserviceaccount.com"
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -89,7 +82,7 @@ echo ""
 echo "Bootstrap: ${ENV} -> ${PROJECT_ID}"
 echo "  State bucket : gs://${STATE_BUCKET}"
 echo "  WIF pool     : ${WIF_POOL}"
-echo "  SAs          : ${SA_PLAN}, ${SA_APPLY}, ${SA_DEPLOY}"
+echo "  SAs          : ${SA_PLAN}, ${SA_APPLY}"
 echo ""
 read -r -p "Continue? [y/N] " CONFIRM
 [[ "$CONFIRM" =~ ^[Yy]$ ]] || { echo "Aborted."; exit 0; }
@@ -180,7 +173,6 @@ create_sa() {
 
 create_sa "$SA_PLAN"   "CI Terraform Plan"           "Read-only SA for terraform plan on infra PRs"
 create_sa "$SA_APPLY"  "CI Terraform Apply ${ENV^}"  "Apply SA for ${ENV} infrastructure changes"
-create_sa "$SA_DEPLOY" "CI Deploy"                   "Pushes images and deploys to VM via GitHub Actions"
 
 # ── 6. IAM role bindings ──────────────────────────────────────────────────────
 
@@ -220,27 +212,9 @@ bind_project "$SA_APPLY_EMAIL" "roles/artifactregistry.admin"       # repo IAM (
 bind_project "$SA_APPLY_EMAIL" "roles/run.admin"                    # service IAM/public-invoker (cloud-run)
 bind_bucket  "$SA_APPLY_EMAIL" "roles/storage.admin"
 
-# Deploy SA: image push + Cloud Run deploy
-for ROLE in \
-  "roles/artifactregistry.writer" \
-  "roles/run.developer"; do
-  bind_project "$SA_DEPLOY_EMAIL" "$ROLE"
-done
-
-# Deploy SA -> serviceAccountUser on sa-api (so Cloud Run can deploy revisions
-# that run as sa-api). sa-api is Terraform-created; fail-soft if it doesn't exist
-# yet on a first bootstrap — just re-run bootstrap after the security apply.
-info "ci-deploy -> serviceAccountUser on $SA_API_EMAIL"
-if gcloud iam service-accounts describe "$SA_API_EMAIL" --project="$PROJECT_ID" &>/dev/null; then
-  gcloud iam service-accounts add-iam-policy-binding "$SA_API_EMAIL" \
-    --project="$PROJECT_ID" \
-    --role="roles/iam.serviceAccountUser" \
-    --member="serviceAccount:${SA_DEPLOY_EMAIL}" --quiet
-  ok "ci-deploy -> serviceAccountUser"
-else
-  echo "  -- $SA_API_EMAIL does not exist yet (apply the security stack first)."
-  echo "     Re-run ./scripts/bootstrap.sh ${ENV} once infra is applied to add this binding."
-fi
+# NOTE: the per-component DEPLOY SAs (engine, platform) and their roles / actAs / WIF bindings are
+# Terraform-managed in modules/ci-identity — NOT here. sa-tf-apply (above) has the projectIamAdmin +
+# serviceAccountAdmin needed to create them and bind their SA-level IAM on apply.
 
 # ── 7. WIF principal bindings ─────────────────────────────────────────────────
 
@@ -259,9 +233,9 @@ bind_wif() {
     --member="$PRINCIPAL" --quiet
 }
 
+# Only the Terraform-runner SAs are bound here. Deploy-SA WIF bindings live in modules/ci-identity.
 bind_wif "$SA_PLAN_EMAIL"   "$GITHUB_OWNER"     "$INFRA_REPO"
 bind_wif "$SA_APPLY_EMAIL"  "$GITHUB_OWNER"     "$INFRA_REPO"
-bind_wif "$SA_DEPLOY_EMAIL" "$APP_GITHUB_OWNER" "$APP_REPO"
 ok "WIF bindings done"
 
 # ── 8. GitHub Secrets output ──────────────────────────────────────────────────
@@ -273,17 +247,20 @@ echo "============================================================"
 echo "  Bootstrap complete for ${ENV^^}"
 echo "============================================================"
 echo ""
-echo "  Repo-level secrets  (Settings -> Secrets -> Actions):"
+echo "  Infra repo (${INFRA_REPO}) secrets — names UNCHANGED (match the infra tf-* workflows):"
 echo ""
-echo "    WIF_PROVIDER          = ${WIF_PROVIDER_FULL}"
-echo "    SA_CI_TF_PLAN_EMAIL   = ${SA_PLAN_EMAIL}"
+echo "    WIF_PROVIDER            = ${WIF_PROVIDER_FULL}    (repo-level)"
+echo "    SA_CI_TF_PLAN_EMAIL     = ${SA_PLAN_EMAIL}    (repo-level)"
+echo "    SA_CI_TF_APPLY_EMAIL    = ${SA_APPLY_EMAIL}    (Environment secret -> ${ENV})"
 echo ""
-echo "  Environment secret  (Settings -> Environments -> ${ENV}):"
+echo "  Engine + Platform deploy secrets (new convention). Deploy SA emails are Terraform-managed"
+echo "  in modules/ci-identity — read them AFTER 'terragrunt apply' of the ci-identity stack:"
 echo ""
-echo "    SA_CI_TF_APPLY_EMAIL  = ${SA_APPLY_EMAIL}"
+echo "    Engine repo (sweptlock-engine):"
+echo "      GCP_WIF_PROVIDER_${ENV^^}       = ${WIF_PROVIDER_FULL}"
+echo "      GCP_SA_ENGINE_DEPLOY_${ENV^^}   = \$(terragrunt output -raw engine_deploy_sa_email)"
 echo ""
-echo "  App repo (${APP_REPO}) secrets (name them with _${ENV^^} suffix):"
-echo ""
-echo "    WIF_PROVIDER_${ENV^^}    = ${WIF_PROVIDER_FULL}"
-echo "    SA_CI_DEPLOY_${ENV^^}    = ${SA_DEPLOY_EMAIL}"
+echo "    Platform repo (Sweptlock-Platform):"
+echo "      GCP_WIF_PROVIDER_${ENV^^}       = ${WIF_PROVIDER_FULL}"
+echo "      GCP_SA_PLATFORM_DEPLOY_${ENV^^} = \$(terragrunt output -raw platform_deploy_sa_email)"
 echo ""

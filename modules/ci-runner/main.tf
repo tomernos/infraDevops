@@ -14,9 +14,9 @@ locals {
   registry_host = "${var.region}-docker.pkg.dev"
   runner_image  = "${local.registry_host}/${var.project_id}/${var.name_prefix}-registry/${var.runner_image_name}"
 
-  # The CI deploy SA is created out-of-band by scripts/bootstrap.sh (same pattern as its
-  # roles/run.developer grant). Referenced by its conventional name, not managed here.
-  ci_deploy_member = "serviceAccount:${var.name_prefix}-sa-ci-deploy@${var.project_id}.iam.gserviceaccount.com"
+  # The engine deploy SA is Terraform-managed in the deploy-identity-engine unit (modules/deploy-identity).
+  # build-android.yml authenticates as it via WIF. Referenced by its conventional name, not managed here.
+  ci_deploy_member = "serviceAccount:${var.name_prefix}-sa-eng-deploy@${var.project_id}.iam.gserviceaccount.com"
 }
 
 # Zero-privilege identity the runner runs as. The build only talks to GitHub (checkout + upload
@@ -28,9 +28,9 @@ resource "google_service_account" "sa_runner" {
   project      = var.project_id
 }
 
-# Let the CI deploy SA (the WIF identity in build-android.yml) execute this job AS sa_runner.
-# This is the ONLY new IAM: the CI SA already has roles/run.developer from bootstrap.sh (it runs
-# the migrate job), so it can already execute Cloud Run Jobs — it just needs act-as on sa_runner.
+# Let the engine deploy SA (the WIF identity in build-android.yml) execute this job AS sa_runner.
+# This is the ONLY new IAM: sa-eng-deploy already has roles/run.developer (from deploy-identity-engine),
+# so it can already execute Cloud Run Jobs — it just needs act-as on sa_runner.
 resource "google_service_account_iam_member" "ci_deploy_act_as_runner" {
   service_account_id = google_service_account.sa_runner.name
   role               = "roles/iam.serviceAccountUser"

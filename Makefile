@@ -16,7 +16,7 @@ BACKEND_DIR ?= /mnt/c/Users/tomer/Desktop/PersonalGitProjects/Sweptlock/backend
 
 .PHONY: help init plan apply destroy \
         apply-security apply-registry apply-networking apply-database \
-        apply-workload-identity apply-cloud-run \
+        apply-deploy-engine apply-deploy-platform apply-cloud-run apply-platform \
         build push deploy \
         populate-secrets \
         logs health
@@ -40,8 +40,10 @@ help:
 	@echo "    make apply-registry"
 	@echo "    make apply-networking"
 	@echo "    make apply-database"
-	@echo "    make apply-workload-identity"
+	@echo "    make apply-deploy-engine"
+	@echo "    make apply-deploy-platform"
 	@echo "    make apply-cloud-run"
+	@echo "    make apply-platform"
 	@echo ""
 	@echo "  Docker (manual push)"
 	@echo "    make build                 Build linux/amd64 image"
@@ -86,11 +88,17 @@ apply-networking:
 apply-database:
 	cd $(STACK_ROOT)/database && terragrunt apply -auto-approve
 
-apply-workload-identity:
-	cd $(STACK_ROOT)/workload-identity && terragrunt apply -auto-approve
+apply-deploy-engine:
+	cd $(STACK_ROOT)/deploy-identity-engine && terragrunt apply -auto-approve
+
+apply-deploy-platform:
+	cd $(STACK_ROOT)/deploy-identity-platform && terragrunt apply -auto-approve
 
 apply-cloud-run:
 	cd $(STACK_ROOT)/cloud-run && terragrunt apply -auto-approve
+
+apply-platform:
+	cd $(STACK_ROOT)/platform && terragrunt apply -auto-approve
 
 # ── Docker (manual builds — CI uses GitHub Actions) ──────────────────────────
 build:
