@@ -28,11 +28,8 @@ inputs = {
   # platform-api image (built from sweptlock-platform/api). Runtime-config only — no build args.
   api_image = "me-west1-docker.pkg.dev/sweptlock-dev-844f2/swpt-mw1-dev-registry/platform-api:63f8203"
 
-  # panel_image: TWO-PHASE.
-  #   Phase 1 — omit (module defaults to the Cloud Run hello image). Apply creates platform-api;
-  #             read its URL from the `platform_api_url` output.
-  #   Phase 2 — build sweptlock-platform/panel with VITE_PLATFORM_API_URL=<platform_api_url>,
-  #             push, then set panel_image to that tag and re-apply. CORS_ORIGINS auto-tracks the
-  #             panel service URL, so no manual CORS edit is needed.
-  # panel_image = "me-west1-docker.pkg.dev/sweptlock-dev-844f2/swpt-mw1-dev-registry/platform-panel:af43b74"
+  # panel_image (Phase 2 — DONE): built from sweptlock-platform/panel with VITE_PLATFORM_API_URL +
+  # VITE_API_BASE_URL baked to the live platform-api URL (63f8203). CORS_ORIGINS auto-tracks the
+  # panel service URL via module.panel.uri, so no manual CORS edit is needed.
+  panel_image = "me-west1-docker.pkg.dev/sweptlock-dev-844f2/swpt-mw1-dev-registry/platform-panel:63f8203"
 }
