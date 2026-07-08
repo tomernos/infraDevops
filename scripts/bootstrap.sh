@@ -197,6 +197,12 @@ bind_bucket() {
 # The SA stays roles/viewer on the project, so it still cannot mutate real infra.
 bind_project "$SA_PLAN_EMAIL"  "roles/viewer"
 bind_bucket  "$SA_PLAN_EMAIL"  "roles/storage.objectUser"
+# Plan must REFRESH IAM-member resources (e.g. google_storage_bucket_iam_member on the
+# quarantine bucket in guest-sharing). Refresh calls *.getIamPolicy, which roles/viewer does
+# NOT include for GCS buckets → plan 403s on any bucket-IAM resource. securityReviewer is the
+# read-only union of *.getIamPolicy across services (get, never set), so the plan SA can refresh
+# any IAM binding while staying strictly non-mutating.
+bind_project "$SA_PLAN_EMAIL"  "roles/iam.securityReviewer"
 
 # Apply SA: editor + IAM admin + state full access.
 # editor does NOT cover two things our modules need, so grant them explicitly:

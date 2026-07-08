@@ -119,6 +119,16 @@ resource "google_storage_bucket_iam_member" "ci_tf_plan_state_reader" {
   member = "serviceAccount:${google_service_account.sa_ci_tf_plan.email}"
 }
 
+# Refreshing IAM-member resources (e.g. google_storage_bucket_iam_member on the guest-sharing
+# quarantine bucket) calls *.getIamPolicy, which roles/viewer lacks for GCS buckets. securityReviewer
+# is the read-only union of *.getIamPolicy across services — get, never set — so the plan SA can
+# refresh any IAM binding without gaining a mutate permission.
+resource "google_project_iam_member" "ci_tf_plan_security_reviewer" {
+  project = var.project_id
+  role    = "roles/iam.securityReviewer"
+  member  = "serviceAccount:${google_service_account.sa_ci_tf_plan.email}"
+}
+
 # ── IAM Roles — sa-ci-tf-apply-sandbox ───────────────────────────────────────
 # Editor covers all resource creation in sandbox. Tighten per-role in prod.
 
