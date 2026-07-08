@@ -228,6 +228,17 @@ resource "google_project_iam_member" "gcs_agent_pubsub" {
   member  = "serviceAccount:${local.gcs_service_agent}"
 }
 
+# At trigger-creation time Eventarc validates the source bucket exists — and it performs that
+# check AS the trigger's own service account (sa_eventarc_scan), NOT a Google service agent.
+# eventReceiver/run.invoker don't include storage.buckets.get, so trigger creation 403s
+# ("Bucket could not be validated") without this. legacyBucketReader is the minimal bucket-scoped
+# role carrying storage.buckets.get.
+resource "google_storage_bucket_iam_member" "evt_scan_bucket_reader" {
+  bucket = google_storage_bucket.quarantine.name
+  role   = "roles/storage.legacyBucketReader"
+  member = "serviceAccount:${google_service_account.sa_eventarc_scan.email}"
+}
+
 resource "google_eventarc_trigger" "scan" {
   name     = "${var.name_prefix}-scan-trigger"
   location = var.region
@@ -255,6 +266,7 @@ resource "google_eventarc_trigger" "scan" {
   depends_on = [
     google_project_iam_member.gcs_agent_pubsub,
     google_cloud_run_v2_service_iam_member.evt_invoke_scanner,
+    google_storage_bucket_iam_member.evt_scan_bucket_reader,
   ]
 }
 
