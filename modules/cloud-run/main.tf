@@ -13,6 +13,21 @@ locals {
     PLATFORM_CA_CERT_PEM = "platform-ca-cert-pem"
     PLATFORM_CA_KEY_PEM  = "platform-ca-key-pem"
   } : {}
+
+  # Guest-sharing non-secret env. The API needs the quarantine bucket name (Drop-Zone signed PUTs)
+  # and, if a cleanup SA is provided, the SA email that /internal/run-cleanup accepts from Cloud
+  # Scheduler. Deliberately NO CLAMAV_* here — scanning is the scanner service's job (localhost clamd),
+  # and leaving CLAMAV_HOST unset makes the API's inline-scan path a no-op (Eventarc is authoritative).
+  guest_env = var.enable_guest_sharing ? merge(
+    { QUARANTINE_BUCKET = "${var.name_prefix}-quarantine" },
+    var.cleanup_scheduler_sa != "" ? { CLEANUP_SCHEDULER_SA = var.cleanup_scheduler_sa } : {},
+  ) : {}
+
+  # Guest-sharing secret env — the HS256 guest-session signing secret (skeleton created in the
+  # security module; value populated out-of-band). Same secret_key_ref:latest pattern as the rest.
+  guest_secret_env = var.enable_guest_sharing ? {
+    DROP_ZONE_JWT_SECRET = "drop-zone-jwt-secret"
+  } : {}
 }
 
 # ── API Cloud Run service ────────────────────────────────────────────────────
@@ -130,6 +145,29 @@ resource "google_cloud_run_v2_service" "api" {
       # secret_key_ref:latest pattern as the core secrets above; never read via a TF data source.
       dynamic "env" {
         for_each = local.ca_secret_env
+        content {
+          name = env.key
+          value_source {
+            secret_key_ref {
+              secret  = "${var.name_prefix}-${env.value}"
+              version = "latest"
+            }
+          }
+        }
+      }
+
+      # Guest-sharing non-secret env (dev; QUARANTINE_BUCKET + optional CLEANUP_SCHEDULER_SA).
+      dynamic "env" {
+        for_each = local.guest_env
+        content {
+          name  = env.key
+          value = env.value
+        }
+      }
+
+      # Guest-sharing secret env (DROP_ZONE_JWT_SECRET) — secret_key_ref:latest, never via a TF data source.
+      dynamic "env" {
+        for_each = local.guest_secret_env
         content {
           name = env.key
           value_source {

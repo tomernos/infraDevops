@@ -43,4 +43,11 @@ inputs = {
   app_env        = "dev"
   ca_provider    = "local"
   allow_local_ca = true
+
+  # Guest sharing (Drop-Zone + Secure Outbound Share). Injects QUARANTINE_BUCKET +
+  # DROP_ZONE_JWT_SECRET on the API. cleanup_scheduler_sa is the CONVENTIONAL name of the SA the
+  # guest-sharing unit creates — passed as a constant (not a dependency output) so the engine→
+  # guest-sharing edge stays one-directional (no cycle). See plans/gusturl-infra-plan.md.
+  enable_guest_sharing = true
+  cleanup_scheduler_sa = "swpt-mw1-dev-sa-cleanup@sweptlock-dev-844f2.iam.gserviceaccount.com"
 }

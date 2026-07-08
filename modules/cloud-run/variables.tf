@@ -62,3 +62,20 @@ variable "allow_local_ca" {
   default     = false
   description = "Explicit dev-only opt-in for an extractable local Platform CA. Rejected unless app_env=dev and ca_provider=local."
 }
+
+# ── Guest sharing (Drop-Zone + Secure Outbound Share) ────────────────────────
+# Off by default so the shared module stays safe for other services. When true, the API gets the
+# quarantine bucket name, the guest-session JWT secret, and the cleanup-scheduler SA (for the
+# /internal/run-cleanup OIDC guard). Scanning is NOT on the API — it lives in the scanner service
+# (modules/guest-sharing). See plans/gusturl-infra-plan.md.
+variable "enable_guest_sharing" {
+  type        = bool
+  default     = false
+  description = "Wire Drop-Zone / Secure-Share env + secret onto the API (dev)."
+}
+
+variable "cleanup_scheduler_sa" {
+  type        = string
+  default     = ""
+  description = "Email of the Cloud Scheduler SA allowed to call POST /internal/run-cleanup (OIDC). Empty leaves the guard env unset."
+}

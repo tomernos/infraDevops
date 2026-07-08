@@ -147,6 +147,10 @@ locals {
     "cors-origin",
     "admin-email",
     "server-kek-master-key", # Phase 1: env-var based; Phase 2: replace with Cloud KMS
+    # Guest-sharing (Drop-Zone + Secure Outbound Share): HS256 secret that signs guest-session
+    # JWTs. Shared by both features; value populated out-of-band (>=32 chars random), never a
+    # TF secret-version. See plans/gusturl-infra-plan.md.
+    "drop-zone-jwt-secret",
     # Platform-api secrets
     "platform-db-user", # read-only postgres user for platform-api
     "platform-db-password",
