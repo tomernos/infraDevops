@@ -144,6 +144,12 @@ resource "google_cloud_run_v2_service" "scanner" {
         name  = "NODE_ENV"
         value = "production"
       }
+      # Runs the shared backend image in a scanner-only role: the entrypoint skips CA-provider
+      # validation for this role, so the scanner never needs (or can mount) the Platform CA key.
+      env {
+        name  = "APP_ROLE"
+        value = "scanner"
+      }
       env {
         name  = "QUARANTINE_BUCKET"
         value = local.quarantine_bucket
