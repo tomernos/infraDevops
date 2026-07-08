@@ -5,13 +5,16 @@
 # NOTE: this module assumes the eventarc / cloudscheduler / pubsub APIs are already enabled on the
 # project (bootstrap concern). Enable them once if a plan errors with a disabled-service message.
 
-data "google_project" "this" {
-  project_id = var.project_id
+# The Cloud Storage service agent is created LAZILY. Reading this data source triggers its creation
+# and returns the correct email — hardcoding service-<num>@gs-project-accounts races its existence
+# (400 "does not exist" on a fresh project).
+data "google_storage_project_service_account" "gcs" {
+  project = var.project_id
 }
 
 locals {
   # GCS service agent — Eventarc GCS triggers publish object events through it; it needs pubsub.publisher.
-  gcs_service_agent = "service-${data.google_project.this.number}@gs-project-accounts.iam.gserviceaccount.com"
+  gcs_service_agent = data.google_storage_project_service_account.gcs.email_address
 
   quarantine_bucket = "${var.name_prefix}-quarantine"
 
@@ -94,6 +97,10 @@ resource "google_cloud_run_v2_service" "scanner" {
   name     = "${var.name_prefix}-scanner"
   location = var.region
   project  = var.project_id
+
+  # Dev service fully owned by Terraform — allow it to replace/destroy the scanner without a manual
+  # console step (the provider defaults this to true, which blocks TF-managed teardown/replacement).
+  deletion_protection = false
 
   # Internal only — nobody on the public internet should reach the scanner. Eventarc/Pub/Sub push is
   # Google-internal traffic. If a GCS→Pub/Sub push is ever rejected in-region, relax to
