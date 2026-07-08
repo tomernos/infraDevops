@@ -128,6 +128,11 @@ resource "google_cloud_run_v2_service" "scanner" {
       name  = "scanner-app"
       image = var.image_url
 
+      # Do not start the app — and therefore do not let Cloud Run route the Eventarc scan request —
+      # until clamd is listening on :3310. On a scale-to-zero cold start the app otherwise races
+      # clamd's ~30-60s signature-DB load and the first scan fails closed with ECONNREFUSED.
+      depends_on = ["clamd"]
+
       ports {
         container_port = 4000
       }
@@ -188,6 +193,18 @@ resource "google_cloud_run_v2_service" "scanner" {
     containers {
       name  = "clamd"
       image = var.clamav_image
+
+      # Readiness gate for the scanner-app depends_on above. clamd binds :3310 only after loading
+      # ~3.6M signatures into memory (~30-60s cold). Probe the TCP port and allow up to ~3 min
+      # before Cloud Run abandons the cold start; the app is held until this passes.
+      startup_probe {
+        tcp_socket {
+          port = 3310
+        }
+        period_seconds    = 10
+        failure_threshold = 18
+        timeout_seconds   = 3
+      }
 
       resources {
         limits = {
