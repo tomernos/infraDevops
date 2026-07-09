@@ -143,6 +143,11 @@ jobs:
           printf '%s\n%s\n%s\n%s\n' "$STATUS" "${ADDS:-0}" "${CHGS:-0}" "${DEST:-0}" \
             > /tmp/artifact/meta.txt
 
+          # Propagate a real plan failure. Without this the step exits 0 (the printf above succeeds),
+          # so steps.plan.outcome is 'success', the "Fail if plan errored" guard below never fires,
+          # and a unit that could not even plan is silently scored as no-changes → apply skips.
+          exit "$EXIT"
+
       - name: "Upload plan artifact"
         if: always()
         uses: actions/upload-artifact@v4
@@ -195,7 +200,7 @@ jobs:
           GH_REPO_URL: '${{ github.server_url }}/${{ github.repository }}'
         run: |
           python3 << 'PYEOF'
-          import json, re, os
+          import json, re, os, sys
 
           modules    = json.loads(os.environ['MODULES'])
           env        = os.environ['ENV_NAME']
@@ -334,6 +339,13 @@ jobs:
           if gh_summary:
               with open(gh_summary, 'a') as f:
                   f.write(summary)
+
+          # Fail closed: if ANY unit could not be planned, block the run so apply never proceeds on a
+          # partial/uncertain state and the failure is loud instead of a green run that skipped apply.
+          if overall_text == 'Plan failed':
+              print('::error::One or more units failed to plan (see the ❌ Error rows above). '
+                    'Blocking apply.')
+              sys.exit(1)
           PYEOF
 
       # PR comment — only on PR events. Sticky marker is per-env so multi-env PRs don't overwrite each other.
