@@ -217,6 +217,7 @@ bind_project "$SA_APPLY_EMAIL" "roles/servicenetworking.networksAdmin" # VPC pee
 bind_project "$SA_APPLY_EMAIL" "roles/artifactregistry.admin"       # repo IAM (registry)
 bind_project "$SA_APPLY_EMAIL" "roles/run.admin"                    # service IAM/public-invoker (cloud-run)
 bind_project "$SA_APPLY_EMAIL" "roles/pubsub.admin"                 # topic/sub IAM (activity-log)
+bind_project "$SA_APPLY_EMAIL" "roles/secretmanager.admin"          # secret IAM (platform secretAccessor grants)
 bind_bucket  "$SA_APPLY_EMAIL" "roles/storage.admin"
 
 # NOTE: the per-component DEPLOY SAs (engine, platform) and their roles / actAs / WIF bindings are
