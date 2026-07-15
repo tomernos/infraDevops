@@ -18,11 +18,17 @@ locals {
 
   quarantine_bucket = "${var.name_prefix}-quarantine"
 
-  # Web origins allowed to PUT directly to the quarantine bucket via V4 signed URLs.
+  # Web origins allowed to PUT directly to the quarantine bucket via V4 signed URLs. MUST stay in
+  # lockstep with the API CORS_ORIGIN allowlist — a missing origin silently breaks drop-zone uploads
+  # from it (that's why firebaseapp.com is here). This is the SOLE definition of the bucket's CORS;
+  # the former duplicate in the security stack was removed (see modules/security/storage.tf).
   cors_origins = [
-    "http://localhost:8081",
     "https://sweptlock-dev-844f2.web.app",
+    "https://sweptlock-dev-844f2.firebaseapp.com",
     "https://sweptlock.com",
+    "http://localhost:8081",
+    "http://localhost:19006",
+    "http://localhost:3000",
   ]
 
   # The scanner runs the SAME backend image as the API, so it needs the same core secrets to boot
@@ -72,6 +78,12 @@ resource "google_storage_bucket" "quarantine" {
   labels = {
     tenant = split("-", var.name_prefix)[0]
     env    = split("-", var.name_prefix)[2]
+  }
+
+  # Sole owner of the live quarantine bucket — guard against an accidental replace/destroy
+  # (carried over from the security-stack copy that used to duplicate-manage this bucket).
+  lifecycle {
+    prevent_destroy = true
   }
 }
 

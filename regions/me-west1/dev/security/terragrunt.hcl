@@ -16,17 +16,7 @@ inputs = {
   # (out-of-band). Enabled only in dev — sandbox/other envs keep the default (false).
   enable_local_platform_ca_secrets = true
 
-  # Drop-zone quarantine bucket: adopt the existing bucket into Terraform (first apply imports it)
-  # and manage its browser CORS. Origins MUST mirror the API CORS_ORIGIN allowlist
-  # (secret swpt-mw1-dev-cors-origin) — see wiki/cors-reference.md. Includes the localhost dev
-  # ports so a locally-served drop-zone page can PUT to the dev bucket.
-  enable_quarantine_bucket = true
-  quarantine_cors_origins = [
-    "https://sweptlock-dev-844f2.web.app",
-    "https://sweptlock-dev-844f2.firebaseapp.com",
-    "https://sweptlock.com",
-    "http://localhost:8081",
-    "http://localhost:19006",
-    "http://localhost:3000",
-  ]
+  # The drop-zone quarantine bucket + its CORS allowlist are owned solely by the guest-sharing stack
+  # now (they used to be duplicated here, which caused permanent CORS drift). See
+  # modules/security/storage.tf and modules/guest-sharing/main.tf.
 }
