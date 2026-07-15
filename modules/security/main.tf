@@ -146,7 +146,9 @@ locals {
     "firebase-admin-sdk-json",
     "cors-origin",
     "admin-email",
-    "server-kek-master-key", # Phase 1: env-var based; Phase 2: replace with Cloud KMS
+    # server-kek-master-key REMOVED (G5, 2026-07-15): trust-plan KEK root + signing seals are
+    # Cloud KMS-only; no app/scanner env references it (engine #44 + infra #29). Destroying the
+    # secret container + versions here is the final teardown of the retired master key.
     # Guest-sharing (Drop-Zone + Secure Outbound Share): HS256 secret that signs guest-session
     # JWTs. Shared by both features; value populated out-of-band (>=32 chars random), never a
     # TF secret-version. See plans/gusturl-infra-plan.md.
