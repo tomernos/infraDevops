@@ -1,3 +1,10 @@
+# ⚠️ DEPRECATED / NOT APPLIED — this module is not sourced by any terragrunt stack (grep the repo).
+# The WIF pool+provider and the TF-runner SAs (sa-ci-tf-plan, sa-tf-apply) plus their project roles
+# are created out-of-band by scripts/bootstrap.sh (gcloud). The per-component DEPLOY SAs live in
+# modules/deploy-identity, and the apply SA's serviceAccountAdmin grant lives in modules/security.
+# SOURCE OF TRUTH for apply-SA project roles = scripts/bootstrap.sh (bind_project "$SA_APPLY_EMAIL" …).
+# Do NOT add IAM here expecting it to apply — it won't. Kept for reference/history only.
+
 locals {
   # app_github_owner defaults to github_owner if not explicitly set
   app_owner = var.app_github_owner != "" ? var.app_github_owner : var.github_owner
@@ -151,13 +158,5 @@ resource "google_project_iam_member" "ci_tf_apply_iam_admin" {
   member  = "serviceAccount:${google_service_account.sa_ci_tf_apply.email}"
 }
 
-# roles/editor excludes pubsub *.getIamPolicy/*.setIamPolicy, and projectIamAdmin only covers
-# project-level IAM — neither lets apply refresh/manage resource-level pubsub IAM. The activity-log
-# module's google_pubsub_topic_iam_member / google_pubsub_subscription_iam_member resources call
-# topics/subscriptions getIamPolicy on every plan, which 403s without this. pubsub.admin is the
-# scoped role covering get+set on both. (Mirrors the plan SA's securityReviewer fix in #19.)
-resource "google_project_iam_member" "ci_tf_apply_pubsub_admin" {
-  project = var.project_id
-  role    = "roles/pubsub.admin"
-  member  = "serviceAccount:${google_service_account.sa_ci_tf_apply.email}"
-}
+# NOTE: the apply SA's pubsub.admin grant (for activity-log topic/sub resource IAM) is codified in
+# scripts/bootstrap.sh alongside cloudkms.admin/run.admin/etc. — NOT here (this module is not applied).
