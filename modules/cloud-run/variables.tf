@@ -32,13 +32,13 @@ variable "image_url" {
 variable "kek_kms_key" {
   type        = string
   default     = ""
-  description = "Cloud KMS crypto-key resource name for trust-plan KEK wrapping (gcp_kms provider). Empty = backend falls back to the local SERVER_KEK_MASTER_KEY."
+  description = "Cloud KMS crypto-key resource name for trust-plan KEK wrapping (gcp_kms provider). KMS-only — the backend fails fast at boot if this is unset (no local master-key fallback)."
 }
 
 variable "sign_hmac_kms_key" {
   type        = string
   default     = ""
-  description = "Cloud KMS CryptoKeyVersion resource name for pdf_sign_events MAC (MacSign/MacVerify). Empty = backend falls back to local HMAC with SERVER_KEK_MASTER_KEY."
+  description = "Cloud KMS CryptoKeyVersion resource name for pdf_sign_events MAC (MacSign/MacVerify). KMS-only — the backend fails fast at boot if this is unset (no local HMAC fallback)."
 }
 
 # ── Platform CA (dev-only) ───────────────────────────────────────────────────

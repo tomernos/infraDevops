@@ -90,7 +90,6 @@ resource "google_cloud_run_v2_service" "api" {
           FIREBASE_ADMIN_SDK_JSON = "firebase-admin-sdk-json"
           FIREBASE_STORAGE_BUCKET = "firebase-storage-bucket"
           FIREBASE_PROJECT_ID     = "firebase-project-id"
-          SERVER_KEK_MASTER_KEY   = "server-kek-master-key"
           CORS_ORIGIN             = "cors-origin"
           ADMIN_EMAIL             = "admin-email"
         }
