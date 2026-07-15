@@ -15,13 +15,23 @@ locals {
   db_secret_keys = ["db-host", "db-port", "db-name", "db-user", "db-password"]
 }
 
-# ── Shared least-privilege runtime identity ──────────────────────────────────
-# The panel serves static files and never exercises the identity, so both services reuse this SA.
-# Only the API touches secrets + Firebase.
-resource "google_service_account" "platform" {
+# ── Least-privilege runtime identities (separation of concerns) ───────────────
+# Two SAs, not one, named symmetrically (-sa-platform-api / -sa-platform-panel). The API is the only
+# privileged workload (DB secrets + Firebase admin). The panel is a PUBLIC static nginx server that
+# serves files and never touches a secret or Firebase — giving it the API's identity would mean a
+# panel-image compromise inherits DB creds + Firebase admin. So the panel runs as its OWN identity with
+# ZERO role bindings: least privilege by construction (a compromised panel can act as nobody).
+resource "google_service_account" "api" {
   project      = var.project_id
-  account_id   = "${var.name_prefix}-sa-platform"
-  display_name = "SweptLock platform admin (api + panel) runtime SA"
+  account_id   = "${var.name_prefix}-sa-platform-api"
+  display_name = "SweptLock platform-api runtime SA (DB secrets + Firebase admin)"
+}
+
+# Panel runtime identity — intentionally NO IAM bindings anywhere. Do not grant it anything.
+resource "google_service_account" "panel" {
+  project      = var.project_id
+  account_id   = "${var.name_prefix}-sa-platform-panel"
+  display_name = "SweptLock platform-panel runtime SA (static SPA — no permissions)"
 }
 
 # Per-secret access to the shared DB credentials (not project-wide) to keep the blast radius tight.
@@ -30,7 +40,7 @@ resource "google_secret_manager_secret_iam_member" "db_secrets" {
   project   = var.project_id
   secret_id = "${var.name_prefix}-${each.value}"
   role      = "roles/secretmanager.secretAccessor"
-  member    = "serviceAccount:${google_service_account.platform.email}"
+  member    = "serviceAccount:${google_service_account.api.email}"
 }
 
 # Firebase Auth user management (suspend/disable/delete) + token verification via Application
@@ -38,7 +48,7 @@ resource "google_secret_manager_secret_iam_member" "db_secrets" {
 resource "google_project_iam_member" "firebase_auth_admin" {
   project = var.project_id
   role    = "roles/firebaseauth.admin"
-  member  = "serviceAccount:${google_service_account.platform.email}"
+  member  = "serviceAccount:${google_service_account.api.email}"
 }
 
 # ── platform-panel (static nginx SPA) ────────────────────────────────────────
@@ -49,8 +59,8 @@ module "panel" {
   region                = var.region
   service_name          = local.panel_name
   image                 = var.panel_image
-  service_account_email = google_service_account.platform.email
-  container_port        = 80 # nginx-spa.conf listens on 80
+  service_account_email = google_service_account.panel.email # dedicated zero-permission identity
+  container_port        = 80                                 # nginx-spa.conf listens on 80
   memory                = "256Mi"
   max_instances         = var.max_instances
   allow_public_invoke   = true
@@ -64,7 +74,7 @@ module "api" {
   region                = var.region
   service_name          = local.api_name
   image                 = var.api_image
-  service_account_email = google_service_account.platform.email
+  service_account_email = google_service_account.api.email
   container_port        = 8080
   max_instances         = var.max_instances
   allow_public_invoke   = true

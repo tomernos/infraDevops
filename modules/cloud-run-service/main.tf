@@ -1,8 +1,10 @@
 # Generic, reusable Cloud Run v2 service. Not specific to any one app — parameterize per service:
 # with/without Direct VPC egress, with/without secret env, public or private invoke, custom port,
 # CPU/memory, and arbitrary plain + secret env. Compose it (call it N times) from a stack or a
-# higher-level module. The image is owned by Terraform here; a consumer whose image is deployed by
-# a separate CI pipeline should wrap this or manage the image out-of-band.
+# higher-level module. The container IMAGE is owned by CI, not Terraform: `var.image` seeds the
+# service on first create, but `lifecycle.ignore_changes` (below) then hands ownership of the running
+# image to the app's deploy pipeline — the same division the engine module uses. This keeps a
+# `terragrunt apply` from reverting a CI-deployed revision, and keeps drift-detect quiet on deploys.
 
 resource "google_cloud_run_v2_service" "this" {
   name     = var.service_name
@@ -75,6 +77,12 @@ resource "google_cloud_run_v2_service" "this" {
   traffic {
     type    = "TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST"
     percent = 100
+  }
+
+  # CI deploys new revisions by image — Terraform should not fight CI over the image.
+  # Mirrors modules/cloud-run (the engine service). `var.image` still seeds the first apply.
+  lifecycle {
+    ignore_changes = [template[0].containers[0].image]
   }
 }
 

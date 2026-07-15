@@ -1,6 +1,7 @@
 # Terraform
 .terraform/
-.terraform.lock.hcl
+# .terraform.lock.hcl is INTENTIONALLY committed (per live unit) — it pins exact provider
+# versions + checksums so every dev and CI run resolves identical providers. Do not ignore it.
 *.tfstate
 *.tfstate.backup
 *.tfplan

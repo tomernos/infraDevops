@@ -9,6 +9,11 @@ output "platform_panel_url" {
 }
 
 output "platform_sa_email" {
-  value       = google_service_account.platform.email
-  description = "Shared runtime service account for both platform services."
+  value       = google_service_account.api.email
+  description = "platform-api runtime service account (DB secrets + Firebase admin)."
+}
+
+output "platform_panel_sa_email" {
+  value       = google_service_account.panel.email
+  description = "platform-panel runtime service account (zero permissions). The deploy SA needs actAs on this to deploy the panel."
 }
