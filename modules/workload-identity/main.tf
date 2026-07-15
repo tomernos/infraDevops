@@ -84,10 +84,10 @@ resource "google_service_account_iam_member" "ci_tf_apply_wif" {
 
 locals {
   deploy_roles = [
-    "roles/artifactregistry.writer",   # push images
-    "roles/compute.osLogin",           # SSH to VM via IAP
+    "roles/artifactregistry.writer",    # push images
+    "roles/compute.osLogin",            # SSH to VM via IAP
     "roles/iap.tunnelResourceAccessor", # open IAP tunnel
-    "roles/compute.viewer",            # describe instances (get IP, zone)
+    "roles/compute.viewer",             # describe instances (get IP, zone)
   ]
 }
 
@@ -148,5 +148,16 @@ resource "google_storage_bucket_iam_member" "ci_tf_apply_state_admin" {
 resource "google_project_iam_member" "ci_tf_apply_iam_admin" {
   project = var.project_id
   role    = "roles/resourcemanager.projectIamAdmin"
+  member  = "serviceAccount:${google_service_account.sa_ci_tf_apply.email}"
+}
+
+# roles/editor excludes pubsub *.getIamPolicy/*.setIamPolicy, and projectIamAdmin only covers
+# project-level IAM — neither lets apply refresh/manage resource-level pubsub IAM. The activity-log
+# module's google_pubsub_topic_iam_member / google_pubsub_subscription_iam_member resources call
+# topics/subscriptions getIamPolicy on every plan, which 403s without this. pubsub.admin is the
+# scoped role covering get+set on both. (Mirrors the plan SA's securityReviewer fix in #19.)
+resource "google_project_iam_member" "ci_tf_apply_pubsub_admin" {
+  project = var.project_id
+  role    = "roles/pubsub.admin"
   member  = "serviceAccount:${google_service_account.sa_ci_tf_apply.email}"
 }
