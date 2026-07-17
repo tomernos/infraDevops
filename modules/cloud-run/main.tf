@@ -131,6 +131,31 @@ resource "google_cloud_run_v2_service" "api" {
         }
       }
 
+      # Forensic watermark service URL (non-secret Cloud Run URL). Empty var = nothing injected;
+      # the backend's ForensicWatermarkProvider stays dormant without it.
+      dynamic "env" {
+        for_each = var.watermark_svc_url != "" ? { WATERMARK_SVC_URL = var.watermark_svc_url } : {}
+        content {
+          name  = env.key
+          value = env.value
+        }
+      }
+
+      # Watermark shared secret — second, app-owned auth gate (X-WM-Auth header) behind the
+      # watermark service's IAM invoker binding. Same secret_key_ref:latest pattern as above.
+      dynamic "env" {
+        for_each = var.watermark_shared_secret_name != "" ? { WATERMARK_SHARED_SECRET = var.watermark_shared_secret_name } : {}
+        content {
+          name = env.key
+          value_source {
+            secret_key_ref {
+              secret  = "${var.name_prefix}-${env.value}"
+              version = "latest"
+            }
+          }
+        }
+      }
+
       # Platform CA guardrail env (non-secret). Only present when ca_provider is set (dev).
       dynamic "env" {
         for_each = local.ca_env

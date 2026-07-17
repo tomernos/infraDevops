@@ -41,6 +41,18 @@ variable "sign_hmac_kms_key" {
   description = "Cloud KMS CryptoKeyVersion resource name for pdf_sign_events MAC (MacSign/MacVerify). KMS-only — the backend fails fast at boot if this is unset (no local HMAC fallback)."
 }
 
+variable "watermark_svc_url" {
+  type        = string
+  default     = ""
+  description = "Internal Cloud Run URL of the forensic watermark service. Empty = WATERMARK_SVC_URL not injected and the forensic provider stays dormant."
+}
+
+variable "watermark_shared_secret_name" {
+  type        = string
+  default     = ""
+  description = "Secret Manager secret suffix (without name_prefix) holding the watermark X-WM-Auth shared secret. Empty = WATERMARK_SHARED_SECRET not injected."
+}
+
 # ── Platform CA (dev-only) ───────────────────────────────────────────────────
 # Opt-in, inert by default. Empty ca_provider leaves all Platform CA wiring off, so the shared
 # module stays safe for non-dev services. The runtime guardrails in backend caProvider.js are
