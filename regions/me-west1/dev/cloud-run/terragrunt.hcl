@@ -29,6 +29,17 @@ dependency "networking" {
   mock_outputs_allowed_terraform_commands = ["init", "validate", "plan", "destroy"]
 }
 
+# Forensic watermark service — applied (gate G2), running the real image. Its internal URL is injected
+# into the API as WATERMARK_SVC_URL; the shared secret container it created is mounted below.
+dependency "watermark" {
+  config_path = "../watermark"
+  mock_outputs = {
+    uri = "https://mock-watermark-exqbi4quaq-zf.a.run.app"
+  }
+  mock_outputs_allowed_terraform_commands = ["init", "validate", "plan", "destroy"]
+  mock_outputs_merge_strategy_with_state  = "shallow"
+}
+
 inputs = {
   name_prefix       = "swpt-mw1-dev"
   sa_api_email      = dependency.security.outputs.sa_api_email
@@ -50,4 +61,11 @@ inputs = {
   # guest-sharing edge stays one-directional (no cycle). See plans/gusturl-infra-plan.md.
   enable_guest_sharing = true
   cleanup_scheduler_sa = "swpt-mw1-dev-sa-cleanup@sweptlock-dev-844f2.iam.gserviceaccount.com"
+
+  # Forensic watermark wiring (PR B): point the API's ForensicWatermarkProvider at the internal
+  # watermark service and mount the shared X-WM-Auth secret (container created by the watermark unit,
+  # value injected out-of-band). Empty defaults keep this dormant; setting them activates the forensic
+  # path. The watermark service is IAM-locked to sa-api (primary gate); the secret is the app-owned second gate.
+  watermark_svc_url            = dependency.watermark.outputs.uri
+  watermark_shared_secret_name = "watermark-shared-secret"
 }
