@@ -93,8 +93,15 @@ resource "google_cloud_run_v2_service" "watermark" {
   }
 
   # CI deploys new revisions by image — Terraform should not fight CI over the image.
+  # `client`/`client_version` are stamped by `deploy-watermark.yml` (`gcloud run services update`) as
+  # service metadata; Terraform never sets them, so it would null them on every plan — perpetual
+  # cosmetic drift. Ignore them, same as the image (mirrors the api/scanner fix in modules/cloud-run).
   lifecycle {
-    ignore_changes = [template[0].containers[0].image]
+    ignore_changes = [
+      template[0].containers[0].image,
+      client,
+      client_version,
+    ]
   }
 
   depends_on = [google_secret_manager_secret_iam_member.watermark_secret_accessor]
