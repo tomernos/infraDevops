@@ -1,14 +1,20 @@
 locals {
   # Non-secret Platform CA guardrail env — injected only when a provider is selected. The backend's
   # caProvider.js reads ALLOW_LOCAL_CA as the literal string "true", hence the bool→string coercion.
-  ca_env = var.ca_provider != "" ? {
-    APP_ENV        = var.app_env
-    CA_PROVIDER    = var.ca_provider
-    ALLOW_LOCAL_CA = var.allow_local_ca ? "true" : "false"
-  } : {}
+  # gcp_cas additionally needs the CAS CA pool (and optionally a specific issuing subordinate CA);
+  # these are non-secret resource names, merged in only for that provider so dev/local is unaffected.
+  ca_env = var.ca_provider == "" ? {} : merge(
+    {
+      APP_ENV        = var.app_env
+      CA_PROVIDER    = var.ca_provider
+      ALLOW_LOCAL_CA = var.allow_local_ca ? "true" : "false"
+    },
+    var.ca_provider == "gcp_cas" ? { CAS_CA_POOL = var.cas_ca_pool } : {},
+    var.ca_provider == "gcp_cas" && var.cas_issuing_ca != "" ? { CAS_ISSUING_CA = var.cas_issuing_ca } : {},
+  )
 
   # Secret-backed CA material — only the local provider needs the extractable cert+key (dev only).
-  # gcp_cas (future) issues via the API and needs no PEM secrets here.
+  # gcp_cas issues via the CAS API (HSM-held key) and needs no PEM secrets here.
   ca_secret_env = var.ca_provider == "local" ? {
     PLATFORM_CA_CERT_PEM = "platform-ca-cert-pem"
     PLATFORM_CA_KEY_PEM  = "platform-ca-key-pem"
@@ -227,6 +233,10 @@ resource "google_cloud_run_v2_service" "api" {
     precondition {
       condition     = var.ca_provider != "local" || var.app_env == "dev"
       error_message = "ca_provider=\"local\" is permitted only when app_env=\"dev\"."
+    }
+    precondition {
+      condition     = var.ca_provider != "gcp_cas" || var.cas_ca_pool != ""
+      error_message = "ca_provider=\"gcp_cas\" requires cas_ca_pool (the CAS CA pool resource name)."
     }
   }
 }

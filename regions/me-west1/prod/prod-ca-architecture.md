@@ -1,9 +1,24 @@
 # Production Platform CA architecture
 
-**Status: design + code-readiness. Nothing provisioned.** This describes how the
+**Status: design + CODE IMPLEMENTED (2026-07-22). Nothing provisioned.** This describes how the
 Platform CA (the authority that issues end-entity **PDF-signing certificates** to
 users) moves from the dev-only extractable local CA to a real managed CA in
 production, and exactly which code/variables/IAM change.
+
+> **Implemented (overnight run 2026-07-22) — code only, no apply:**
+> - **Engine** (`feat/prod-ca-provider`): `backend/src/crypto/providers/gcpCasProvider.js`
+>   (CAS provider, lazy-required), `caProvider.js` unblocks `gcp_cas`, `caProvider.test.js`
+>   updated (16/16 pass without the dep installed), `package.json` adds
+>   `@google-cloud/security-private-ca`. ⚠️ run `npm install` from **PowerShell** to sync the
+>   lockfile (WSL NTFS blocks it) before that branch's CI.
+> - **Infra** (`feat/prod-environment`): `modules/private-ca` (CAS pool + self-signed root +
+>   `certificateRequester` IAM), `regions/me-west1/prod/private-ca/` stack, and prod `cloud-run`
+>   wired `ca_provider="gcp_cas"` + `cas_ca_pool` from the new stack. `terraform validate` passes
+>   on both modules.
+> - **Remaining (Tomer / cloud):** apply; enable CAS **Data Access audit logs**; optionally add the
+>   subordinate-CA tier (below) via the CSR sign+activate flow; set `CAS_ISSUING_CA` if pinning a
+>   subordinate. The single self-signed root already issues end-entity certs — the subordinate is a
+>   rotation-hygiene enhancement, not a blocker.
 
 ## What the Platform CA is (and is NOT)
 - **Is:** the issuer of short-lived end-entity certs used to sign users' PDFs

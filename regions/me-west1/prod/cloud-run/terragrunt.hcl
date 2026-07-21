@@ -29,6 +29,16 @@ dependency "networking" {
   mock_outputs_allowed_terraform_commands = ["init", "validate", "plan", "destroy"]
 }
 
+# Production Platform CA (Google CAS). Applies before cloud-run so the pool exists when the API
+# boots and validates it. Acyclic: private-ca depends only on security. See prod-ca-architecture.md.
+dependency "private_ca" {
+  config_path = "../private-ca"
+  mock_outputs = {
+    ca_pool_name = "projects/sweptlock-prod/locations/me-west1/caPools/swpt-mw1-prod-ca-pool"
+  }
+  mock_outputs_allowed_terraform_commands = ["init", "validate", "plan", "destroy"]
+}
+
 inputs = {
   name_prefix       = "swpt-mw1-prod"
   sa_api_email      = dependency.security.outputs.sa_api_email
@@ -38,16 +48,16 @@ inputs = {
   kek_kms_key       = dependency.security.outputs.kms_trust_dek_id
   sign_hmac_kms_key = dependency.security.outputs.kms_sign_hmac_version_id
 
-  # ── PROD Platform CA — DECISION REQUIRED BEFORE APPLY ─────────────────────────
-  # Dev runs the LOCAL dev CA (ca_provider="local", allow_local_ca=true) with two
-  # PEM secrets seeded out-of-band. PROD MUST NOT use the local CA — allow_local_ca
-  # stays FALSE, and the local PEM secrets are NOT created (security stack sets
-  # enable_local_platform_ca_secrets=false). Wire ca_provider to your real prod CA
-  # (e.g. Google Private CA / managed CA) per the CA design, then apply. Leaving the
-  # sentinel will fail validation on purpose — a fail-safe, not a mistake.
+  # ── PROD Platform CA — Google Certificate Authority Service (CAS) ─────────────
+  # PROD uses the real HSM-backed CA (never the extractable local dev CA): allow_local_ca stays
+  # FALSE and the local PEM secrets are not created (security stack sets
+  # enable_local_platform_ca_secrets=false). The engine's gcp_cas provider issues from the CAS
+  # pool below; CAS_CA_POOL is injected from the private-ca stack. Design + rotation/revocation:
+  # regions/me-west1/prod/prod-ca-architecture.md.
   app_env        = "prod"
-  ca_provider    = "REPLACE_WITH_PROD_CA_PROVIDER" # must not be "local"
+  ca_provider    = "gcp_cas"
   allow_local_ca = false
+  cas_ca_pool    = dependency.private_ca.outputs.ca_pool_name
 
   # Guest sharing (Drop-Zone + Secure Outbound Share). Injects QUARANTINE_BUCKET +
   # DROP_ZONE_JWT_SECRET on the API. cleanup_scheduler_sa is the CONVENTIONAL name of the SA the

@@ -18,17 +18,21 @@ applied — these files only *describe* prod until you run the steps.
 | SQL backups | 7 days | **30 days** |
 | SQL `deletion_protection` | false | **true** |
 | Cloud Run max instances | 3 | 10 (watermark 4) |
-| Platform CA | `local` dev CA | **real CA — decision required** |
+| Platform CA | `local` dev CA | **`gcp_cas` (CAS) — wired to the `private-ca` stack** |
 | `app_env` | `dev` | `prod` |
 | State bucket | `swpt-mw1-infra-dev-tf` | `swpt-mw1-infra-prod-tf` (auto) |
 | Resource prefix | `swpt-mw1-dev` | `swpt-mw1-prod` |
 
-## Two decisions you must make before `apply`
-1. **Prod Platform CA** — `cloud-run/terragrunt.hcl` has `ca_provider =
-   "REPLACE_WITH_PROD_CA_PROVIDER"` (fails validation on purpose). Prod must **not**
-   use the local dev CA (`allow_local_ca = false`, and `security` does not create the
-   local PEM secrets). Wire your real CA (e.g. Google Private CA) per the CA design.
-2. **Platform image tags** — `platform/terragrunt.hcl` has
+## Before `apply`
+**Platform CA is now wired** — `cloud-run/terragrunt.hcl` sets `ca_provider="gcp_cas"` with
+`cas_ca_pool` from the new `private-ca` stack (CAS pool + self-signed root, HSM key,
+`allow_local_ca=false`, no local PEM secrets). Design + rotation/revocation in
+`prod-ca-architecture.md`. CA to-dos at apply time: ensure `privateca.googleapis.com` is enabled
+(add to `bootstrap.sh` API list if missing), enable CAS **Data Access audit logs**, and
+optionally set `CAS_ISSUING_CA` if you pin a subordinate CA.
+
+### One decision you must still make before `apply`
+1. **Platform image tags** — `platform/terragrunt.hcl` has
    `:REPLACE_WITH_PROD_TAG` for `api_image` / `panel_image`. For the first apply,
    build+push a prod image or temporarily point at a public hello image; the
    Platform deploy pipeline manages the digest afterward. (The engine backend image
@@ -56,9 +60,10 @@ cd sweptlock-infra
 ./scripts/bootstrap.sh prod        # authenticated as Owner of sweptlock-prod
 ```
 
-### 3. Fill the two decisions
-- `regions/me-west1/prod/cloud-run/terragrunt.hcl` → real `ca_provider`.
+### 3. Fill the remaining decision
 - `regions/me-west1/prod/platform/terragrunt.hcl` → real image tags (or a hello image for apply #1).
+- (CA already wired: `cloud-run` → `ca_provider="gcp_cas"` + `private-ca` stack. Confirm
+  `privateca.googleapis.com` is enabled by `bootstrap.sh`.)
 
 ### 4. Create the `prod` GitHub Environment (approval gate)
 In `SweptLock/Sweptlock-Infra` → Settings → Environments → **New: `prod`** →

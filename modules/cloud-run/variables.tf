@@ -75,6 +75,18 @@ variable "allow_local_ca" {
   description = "Explicit dev-only opt-in for an extractable local Platform CA. Rejected unless app_env=dev and ca_provider=local."
 }
 
+variable "cas_ca_pool" {
+  type        = string
+  default     = ""
+  description = "gcp_cas only: full CAS CA pool resource name (projects/<p>/locations/<loc>/caPools/<pool>) injected as CAS_CA_POOL. Required when ca_provider=gcp_cas."
+}
+
+variable "cas_issuing_ca" {
+  type        = string
+  default     = ""
+  description = "gcp_cas only (optional): a specific subordinate CA id in the pool to issue from, injected as CAS_ISSUING_CA. Empty lets the pool select."
+}
+
 # ── Guest sharing (Drop-Zone + Secure Outbound Share) ────────────────────────
 # Off by default so the shared module stays safe for other services. When true, the API gets the
 # quarantine bucket name, the guest-session JWT secret, and the cleanup-scheduler SA (for the

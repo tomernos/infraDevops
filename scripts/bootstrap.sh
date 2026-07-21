@@ -108,6 +108,7 @@ gcloud services enable \
   logging.googleapis.com \
   monitoring.googleapis.com \
   cloudresourcemanager.googleapis.com \
+  privateca.googleapis.com \
   --project="$PROJECT_ID" --quiet
 ok "APIs enabled"
 

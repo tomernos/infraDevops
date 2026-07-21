@@ -26,18 +26,21 @@ security
   ├─ networking ──► database
   │              ├─ cloud-run ──► guest-sharing
   │              └─ platform ───► deploy-identity-platform
+  ├─ private-ca ─► cloud-run   (cloud-run consumes the CAS pool name)
   ├─ registry
   ├─ activity-log
   ├─ watermark ──► deploy-identity-engine  (also needs security)
   └─ ci-runner
 ```
+`cloud-run` now has two inbound edges (networking, private-ca); still acyclic.
 | Stack | Purpose |
 |---|---|
 | `security` | KMS key ring + trust-DEK key + sign-HMAC key; runtime service accounts (`sa-api`, `sa-cleanup`, …) + IAM. Foundational. **Prod: no local-CA PEM secrets** (`enable_local_platform_ca_secrets=false`). |
 | `networking` | VPC, private subnet, Cloud NAT, private service connection for Cloud SQL. |
 | `registry` | Artifact Registry repo (`swpt-mw1-prod-registry`) for container images. |
 | `database` | Cloud SQL Postgres (**prod: `db-custom-2-4096`, HA, PITR, 30d backups, `deletion_protection=true`**), private IP. |
-| `cloud-run` | Engine API service (`swpt-mw1-prod-api`); wires KMS keys, VPC egress, guest-sharing env, and the Platform CA (**prod: real CA — `ca_provider` decision, `allow_local_ca=false`**). |
+| `cloud-run` | Engine API service (`swpt-mw1-prod-api`); wires KMS keys, VPC egress, guest-sharing env, and the Platform CA (**prod: `ca_provider="gcp_cas"`, `cas_ca_pool` from `private-ca`, `allow_local_ca=false`**). |
+| `private-ca` | Google Certificate Authority Service — CA pool (ENTERPRISE) + self-signed root CA (HSM key) that issues end-entity PDF-signing certs; grants `sa-api` `certificateRequester`. Design: `prod-ca-architecture.md`. |
 | `guest-sharing` | Drop-Zone quarantine bucket + CORS, ClamAV scanner (Eventarc), cleanup scheduler. |
 | `activity-log` | Pub/Sub → Firestore operational activity feed + publisher/subscriber IAM. |
 | `watermark` | Forensic watermark Cloud Run service (private + authed). |
