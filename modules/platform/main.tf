@@ -30,9 +30,11 @@ resource "google_service_account" "api" {
 # Panel runtime identity — intentionally NO IAM bindings anywhere. Do not grant it anything.
 resource "google_service_account" "panel" {
   project = var.project_id
-  # `plat` not `platform` so the id fits GCP's 30-char account_id limit under the longer
-  # prod prefix (swpt-mw1-prod-sa-plat-panel = 27; swpt-mw1-prod-sa-platform-panel was 31).
-  account_id   = "${var.name_prefix}-sa-plat-panel"
+  # GCP caps account_id at 30 chars. `${prefix}-sa-platform-panel` is exactly 30 for dev but 31
+  # for the longer prod prefix. Keep the full name WHERE IT FITS so existing envs (dev) are
+  # byte-identical — no live SA recreation — and fall back to the shorter `-sa-plat-panel` only
+  # where it would overflow (prod, and any future longer-prefixed env).
+  account_id   = length("${var.name_prefix}-sa-platform-panel") <= 30 ? "${var.name_prefix}-sa-platform-panel" : "${var.name_prefix}-sa-plat-panel"
   display_name = "SweptLock platform-panel runtime SA (static SPA — no permissions)"
 }
 
