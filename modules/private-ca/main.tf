@@ -67,3 +67,26 @@ resource "google_privateca_ca_pool_iam_member" "requester" {
   role     = "roles/privateca.certificateRequester"
   member   = each.value
 }
+
+# The app's startup CA reachability probe calls caPools.get, which certificateRequester does NOT
+# include. Rather than grant the broad roles/privateca.auditor (which also exposes certificate
+# metadata), define a custom role scoped to exactly that one read — so the runtime SA can verify
+# the pool at boot (fail-fast on a misconfigured CAS_CA_POOL) with no extra reach.
+# See F3 in backend/src/crypto/providers/gcpCasProvider.js (gcp_cas provider).
+resource "google_project_iam_custom_role" "ca_pool_reader" {
+  project     = var.project_id
+  role_id     = "casCaPoolReader"
+  title       = "CAS CA Pool Reader (get only)"
+  description = "privateca.caPools.get only — the app's startup CA reachability probe."
+  permissions = ["privateca.caPools.get"]
+}
+
+resource "google_privateca_ca_pool_iam_member" "pool_reader" {
+  for_each = toset(var.certificate_requester_members)
+
+  ca_pool  = google_privateca_ca_pool.pool.name
+  location = var.region
+  project  = var.project_id
+  role     = google_project_iam_custom_role.ca_pool_reader.id
+  member   = each.value
+}
