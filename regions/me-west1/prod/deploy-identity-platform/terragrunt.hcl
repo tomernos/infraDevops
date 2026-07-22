@@ -20,7 +20,7 @@ dependency "platform" {
   config_path = "../platform"
   mock_outputs = {
     platform_sa_email       = "swpt-mw1-prod-sa-platform-api@sweptlock-prod.iam.gserviceaccount.com"
-    platform_panel_sa_email = "swpt-mw1-prod-sa-platform-panel@sweptlock-prod.iam.gserviceaccount.com"
+    platform_panel_sa_email = "swpt-mw1-prod-sa-plat-panel@sweptlock-prod.iam.gserviceaccount.com"
   }
   mock_outputs_allowed_terraform_commands = ["init", "validate", "plan", "destroy"]
   # The platform stack is already applied, so terragrunt reads its REAL state outputs and would ignore
