@@ -29,8 +29,12 @@ resource "google_service_account" "api" {
 
 # Panel runtime identity — intentionally NO IAM bindings anywhere. Do not grant it anything.
 resource "google_service_account" "panel" {
-  project      = var.project_id
-  account_id   = "${var.name_prefix}-sa-platform-panel"
+  project = var.project_id
+  # `plat` (not `platform`) so the id fits GCP's 30-char account_id limit — the prod prefix makes
+  # `${prefix}-sa-platform-panel` 31 chars. Same name in EVERY environment (dev + prod identical).
+  # Verified safe: the panel SA has no external references (no GitHub secrets/vars, no IAM member
+  # bindings — zero-permission SPA identity); dev's SA re-creates cleanly on its next platform apply.
+  account_id   = "${var.name_prefix}-sa-plat-panel"
   display_name = "SweptLock platform-panel runtime SA (static SPA — no permissions)"
 }
 

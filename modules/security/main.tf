@@ -53,29 +53,20 @@ resource "google_project_iam_member" "tf_apply_sa_admin" {
 
 # ── KMS ───────────────────────────────────────────────────────────────────────
 #
-# GCP KMS KeyRings cannot be truly deleted — GCP soft-deletes them and reserves
-# the name for 30 days. Any apply within that window will 409 without an import.
-#
-# These import blocks are idempotent:
-#   - Resource already in state  → no-op (normal path)
-#   - Resource in GCP, not state → imports it automatically (destroy/re-apply path)
-#   - Brand-new environment      → comment both import blocks out for the first
-#                                  apply only; uncomment after.
-
-import {
-  id = "projects/${var.project_id}/locations/${var.region}/keyRings/${var.name_prefix}-kms-kr"
-  to = google_kms_key_ring.main
-}
+# Plain resources — created normally in every environment. NOTE: GCP soft-deletes a
+# KMS KeyRing/CryptoKey and reserves the name for 30 days, so if you ever DESTROY and
+# re-apply within that window the create will 409 ("already exists"). That is a rare,
+# one-off event — recover with a single manual import, NOT a permanent `import` block
+# (which otherwise breaks every brand-new environment's first apply):
+#   terragrunt import google_kms_key_ring.main \
+#     "projects/<project>/locations/<region>/keyRings/<prefix>-kms-kr"
+#   terragrunt import google_kms_crypto_key.trust_dek \
+#     "projects/<project>/locations/<region>/keyRings/<prefix>-kms-kr/cryptoKeys/<prefix>-kms-trust-dek"
 
 resource "google_kms_key_ring" "main" {
   name     = "${var.name_prefix}-kms-kr"
   location = var.region
   project  = var.project_id
-}
-
-import {
-  id = "projects/${var.project_id}/locations/${var.region}/keyRings/${var.name_prefix}-kms-kr/cryptoKeys/${var.name_prefix}-kms-trust-dek"
-  to = google_kms_crypto_key.trust_dek
 }
 
 resource "google_kms_crypto_key" "trust_dek" {

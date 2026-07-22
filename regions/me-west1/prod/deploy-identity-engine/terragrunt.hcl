@@ -1,0 +1,54 @@
+# Engine CI deploy identity — own state boundary.
+# Composition lives HERE (the live layer): concrete repo, roles, runtime SA, and descriptions are
+# wired as inputs to the reusable modules/deploy-identity leaf.
+
+include "root" {
+  path = find_in_parent_folders("root.hcl")
+}
+
+terraform {
+  source = "../../../../modules/deploy-identity"
+}
+
+# sa-api (engine backend runtime SA) — this deploy SA needs serviceAccountUser on it to deploy
+# Cloud Run revisions that run as sa-api.
+dependency "security" {
+  config_path = "../security"
+  mock_outputs = {
+    sa_api_email = "swpt-mw1-prod-sa-api@sweptlock-prod.iam.gserviceaccount.com"
+  }
+  mock_outputs_allowed_terraform_commands = ["init", "validate", "plan", "destroy"]
+}
+
+# sa-watermark — same requirement: deploy-watermark.yml updates the watermark service's image, and
+# every revision RUNS AS this SA, so the deploy SA needs serviceAccountUser on it too. Each runtime
+# SA a workflow deploys onto needs its own actAs grant; adding a service without this fails at
+# deploy time, not plan time (PERMISSION_DENIED iam.serviceaccounts.actAs).
+dependency "watermark" {
+  config_path = "../watermark"
+  mock_outputs = {
+    sa_email = "swpt-mw1-prod-sa-watermark@sweptlock-prod.iam.gserviceaccount.com"
+  }
+  mock_outputs_allowed_terraform_commands = ["init", "validate", "plan", "destroy"]
+}
+
+inputs = {
+  name_prefix = "swpt-mw1-prod"
+  component   = "eng"
+
+  display_name = "Engine CI Deploy"
+  description  = "GitHub Actions (SweptLock/sweptlock-engine): push images + deploy the backend and watermark Cloud Run services"
+
+  # EXACT case as GitHub emits in the OIDC attribute.repository claim (case-sensitive).
+  github_repo = "SweptLock/sweptlock-engine"
+
+  project_roles = [
+    "roles/artifactregistry.writer", # push container images
+    "roles/run.developer",           # deploy Cloud Run services/revisions
+  ]
+
+  act_as_service_accounts = [
+    dependency.security.outputs.sa_api_email,
+    dependency.watermark.outputs.sa_email,
+  ]
+}

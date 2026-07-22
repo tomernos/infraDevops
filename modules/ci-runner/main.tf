@@ -42,6 +42,10 @@ resource "google_cloud_run_v2_job" "runner" {
   location = var.region
   project  = var.project_id
 
+  # Ephemeral JIT build runner — stateless, Terraform-managed. Allow IaC to replace/destroy it;
+  # the provider default (true) blocks that. See modules/cloud-run-service for rationale.
+  deletion_protection = false
+
   template {
     template {
       service_account       = google_service_account.sa_runner.email
