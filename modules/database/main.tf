@@ -1,6 +1,6 @@
 resource "random_password" "db_password" {
   length  = 32
-  special = false  # avoids shell-escaping issues in connection strings
+  special = false # avoids shell-escaping issues in connection strings
 }
 
 resource "google_sql_database_instance" "main" {
@@ -9,6 +9,7 @@ resource "google_sql_database_instance" "main" {
   database_version = "POSTGRES_15"
   project          = var.project_id
 
+  # Terraform-level guard: blocks `terraform destroy` of the instance.
   deletion_protection = var.deletion_protection
 
   settings {
@@ -18,8 +19,13 @@ resource "google_sql_database_instance" "main" {
     disk_type         = "PD_SSD"
     disk_autoresize   = true
 
+    # GCP API-level deletion protection (distinct from the TF guard above): the instance cannot be
+    # deleted via the API/console until this is turned off. Tie it to the same per-env var so prod
+    # gets it (true) and dev stays deletable (false).
+    deletion_protection_enabled = var.deletion_protection
+
     ip_configuration {
-      ipv4_enabled    = false           # no public IP — private only
+      ipv4_enabled    = false # no public IP — private only
       private_network = var.vpc_self_link
       ssl_mode        = "ALLOW_UNENCRYPTED_AND_ENCRYPTED"
     }
@@ -35,7 +41,7 @@ resource "google_sql_database_instance" "main" {
     }
 
     maintenance_window {
-      day          = 7  # Sunday
+      day          = 7 # Sunday
       hour         = 4
       update_track = "stable"
     }
