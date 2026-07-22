@@ -10,8 +10,10 @@ terraform {
   source = "../../../../modules/deploy-identity"
 }
 
-# sa-api (engine backend runtime SA) — this deploy SA needs serviceAccountUser on it to deploy
-# Cloud Run revisions that run as sa-api.
+# Runtime SAs this deploy SA must impersonate (serviceAccountUser/actAs) to deploy Cloud Run
+# revisions that run AS them:
+#   - sa-api       → the engine backend service (swpt-mw1-dev-api)
+#   - sa-watermark → the forensic watermark service (deploy-watermark.yml mints revisions run as it)
 dependency "security" {
   config_path = "../security"
   mock_outputs = {
@@ -20,16 +22,17 @@ dependency "security" {
   mock_outputs_allowed_terraform_commands = ["init", "validate", "plan", "destroy"]
 }
 
-# sa-watermark — same requirement: deploy-watermark.yml updates the watermark service's image, and
-# every revision RUNS AS this SA, so the deploy SA needs serviceAccountUser on it too. Each runtime
-# SA a workflow deploys onto needs its own actAs grant; adding a service without this fails at
-# deploy time, not plan time (PERMISSION_DENIED iam.serviceaccounts.actAs).
+# Watermark runtime SA. deploy-watermark.yml (engine) runs `gcloud run services update`, which mints a
+# revision that runs as sa-watermark → the engine deploy SA needs actAs on it too (else deploy fails at
+# runtime with PERMISSION_DENIED iam.serviceaccounts.actAs, green at plan/TF time). The watermark unit
+# is applied (gate G2); the mock keeps plan green if this ever runs before it in a fresh clone.
 dependency "watermark" {
   config_path = "../watermark"
   mock_outputs = {
     sa_email = "swpt-mw1-dev-sa-watermark@sweptlock-dev-844f2.iam.gserviceaccount.com"
   }
   mock_outputs_allowed_terraform_commands = ["init", "validate", "plan", "destroy"]
+  mock_outputs_merge_strategy_with_state  = "shallow"
 }
 
 inputs = {
@@ -37,7 +40,7 @@ inputs = {
   component   = "eng"
 
   display_name = "Engine CI Deploy"
-  description  = "GitHub Actions (SweptLock/sweptlock-engine): push images + deploy the backend and watermark Cloud Run services"
+  description  = "GitHub Actions (SweptLock/sweptlock-engine): push images + deploy the backend Cloud Run service"
 
   # EXACT case as GitHub emits in the OIDC attribute.repository claim (case-sensitive).
   github_repo = "SweptLock/sweptlock-engine"

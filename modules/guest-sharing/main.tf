@@ -222,13 +222,22 @@ resource "google_cloud_run_v2_service" "scanner" {
           cpu    = "1"
           memory = "2Gi"
         }
+        # Faster clamd cold start — more CPU while it loads ~3.6M signatures (matches live; Terraform
+        # was nulling this on every plan otherwise).
+        startup_cpu_boost = true
       }
     }
   }
 
   # CI deploys the app image; Terraform must not fight it. clamd image stays TF-managed (index 1).
+  # `client`/`client_version` are stamped by `gcloud run deploy` (the scanner shares the backend CI's
+  # gcloud deploy path) — ignore them to stop perpetual cosmetic drift, same as the image.
   lifecycle {
-    ignore_changes = [template[0].containers[0].image]
+    ignore_changes = [
+      template[0].containers[0].image,
+      client,
+      client_version,
+    ]
   }
 }
 

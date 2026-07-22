@@ -233,8 +233,15 @@ resource "google_cloud_run_v2_service" "api" {
 
   # CI deploys new revisions by image — Terraform should not fight CI over the image.
   # All other template settings (env vars, scaling, vpc) are still managed by Terraform.
+  # `client`/`client_version` are stamped by `gcloud run deploy` (the backend CI) as service metadata;
+  # Terraform never sets them, so it would null them on every plan — perpetual cosmetic drift. Ignore
+  # them for the same reason as the image.
   lifecycle {
-    ignore_changes = [template[0].containers[0].image]
+    ignore_changes = [
+      template[0].containers[0].image,
+      client,
+      client_version,
+    ]
 
     # Mirror backend caProvider.js guardrails at the deploy boundary (fail-closed):
     # the extractable local CA is only ever permitted in dev with an explicit opt-in.
