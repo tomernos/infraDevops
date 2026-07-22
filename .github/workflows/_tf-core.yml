@@ -14,10 +14,14 @@ name: "TF Core (reusable)"
 # Both plan and apply auto-detect affected envs in the parent workflow.
 # project_id is resolved here per env name — single source of truth.
 #
-# Required secrets:
-#   Repo:                                  WIF_PROVIDER, SA_CI_TF_PLAN_EMAIL
-#   Env (sandbox / staging / prod):        SA_CI_TF_APPLY_EMAIL
-#                                          + required reviewers under environment protection rules
+# Required secrets (per-env isolation — dev credentials never reach prod):
+#   Repo (dev / shared):   WIF_PROVIDER, SA_CI_TF_PLAN_EMAIL
+#   Repo (prod):           WIF_PROVIDER_PROD, SA_CI_TF_PLAN_EMAIL_PROD
+#   Env (each env):        SA_CI_TF_APPLY_EMAIL  (+ required reviewers under env protection)
+# The plan job is NOT env-bound, so plan creds MUST be repo-level; it selects the _PROD pair for
+# prod. The apply job binds `environment:`, so its apply SA is env-scoped; the WIF provider is
+# selected per env like the plan job. prod maps ONLY to _PROD (no dev fallback) — a missing prod
+# secret resolves to '' and the fail-closed guard aborts the run.
 
 on:
   workflow_call:
@@ -107,11 +111,27 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Per-env CI identity (fail-closed): dev uses the shared repo secrets; prod uses the _PROD
+      # repo secrets. prod maps ONLY to _PROD (no dev fallback), so a missing prod secret resolves
+      # to '' and the guard aborts — dev creds can never reach prod. (sandbox/staging map to '' too
+      # until their own secrets are added.)
+      - name: "Resolve plan credentials for ${{ inputs.environment }}"
+        env:
+          WIF: ${{ (inputs.environment == 'dev' && secrets.WIF_PROVIDER) || (inputs.environment == 'prod' && secrets.WIF_PROVIDER_PROD) || '' }}
+          SA:  ${{ (inputs.environment == 'dev' && secrets.SA_CI_TF_PLAN_EMAIL) || (inputs.environment == 'prod' && secrets.SA_CI_TF_PLAN_EMAIL_PROD) || '' }}
+        run: |
+          if [ -z "$WIF" ] || [ -z "$SA" ]; then
+            echo "::error::No plan credentials for env '${{ inputs.environment }}'. For prod, set repo secrets WIF_PROVIDER_PROD + SA_CI_TF_PLAN_EMAIL_PROD."
+            exit 1
+          fi
+          echo "TF_WIF=$WIF" >> "$GITHUB_ENV"
+          echo "TF_SA=$SA"   >> "$GITHUB_ENV"
+
       - name: "Setup Terraform + Terragrunt + GCP auth"
         uses: ./.github/actions/tf-setup
         with:
-          service-account: ${{ secrets.SA_CI_TF_PLAN_EMAIL }}
-          wif-provider: ${{ secrets.WIF_PROVIDER }}
+          service-account: ${{ env.TF_SA }}
+          wif-provider: ${{ env.TF_WIF }}
           project-id: ${{ needs.setup.outputs.project_id }}
 
       - name: "Plan ${{ matrix.module }}"
@@ -395,11 +415,26 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Per-env CI identity (fail-closed). The apply SA stays ENVIRONMENT-scoped (this job binds
+      # `environment: <env>`), so SA_CI_TF_APPLY_EMAIL resolves to that env's value. The WIF
+      # provider is selected per env like the plan job; prod maps ONLY to _PROD (no dev fallback).
+      - name: "Resolve apply credentials for ${{ inputs.environment }}"
+        env:
+          WIF: ${{ (inputs.environment == 'dev' && secrets.WIF_PROVIDER) || (inputs.environment == 'prod' && secrets.WIF_PROVIDER_PROD) || '' }}
+          SA:  ${{ secrets.SA_CI_TF_APPLY_EMAIL }}
+        run: |
+          if [ -z "$WIF" ] || [ -z "$SA" ]; then
+            echo "::error::No apply credentials for env '${{ inputs.environment }}'. Set WIF_PROVIDER_PROD (repo) + SA_CI_TF_APPLY_EMAIL (on the '${{ inputs.environment }}' Environment)."
+            exit 1
+          fi
+          echo "TF_WIF=$WIF" >> "$GITHUB_ENV"
+          echo "TF_SA=$SA"   >> "$GITHUB_ENV"
+
       - name: "Setup Terraform + Terragrunt + GCP auth"
         uses: ./.github/actions/tf-setup
         with:
-          service-account: ${{ secrets.SA_CI_TF_APPLY_EMAIL }}
-          wif-provider: ${{ secrets.WIF_PROVIDER }}
+          service-account: ${{ env.TF_SA }}
+          wif-provider: ${{ env.TF_WIF }}
           project-id: ${{ needs.setup.outputs.project_id }}
 
       - name: "Apply all stacks"
