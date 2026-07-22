@@ -12,6 +12,11 @@ resource "google_cloud_run_v2_service" "this" {
   project  = var.project_id
   ingress  = var.ingress
 
+  # Stateless (image in Artifact Registry, config in Terraform) — let IaC own the full lifecycle.
+  # The provider defaults this to true, which blocks Terraform-managed replacement (e.g. re-creating
+  # a tainted first-apply). Protection here comes from plan review + state, not the GCP flag.
+  deletion_protection = false
+
   template {
     service_account = var.service_account_email
 

@@ -43,6 +43,10 @@ resource "google_cloud_run_v2_service" "api" {
   project  = var.project_id
   ingress  = "INGRESS_TRAFFIC_ALL"
 
+  # Stateless, Terraform/CI-managed — let IaC own the full lifecycle (the provider default `true`
+  # blocks Terraform-managed replacement). Consistent with the other Cloud Run modules.
+  deletion_protection = false
+
   template {
     service_account = var.sa_api_email
 

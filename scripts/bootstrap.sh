@@ -109,6 +109,7 @@ gcloud services enable \
   monitoring.googleapis.com \
   cloudresourcemanager.googleapis.com \
   privateca.googleapis.com \
+  firestore.googleapis.com \
   --project="$PROJECT_ID" --quiet
 ok "APIs enabled"
 
