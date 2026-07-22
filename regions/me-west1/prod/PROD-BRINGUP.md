@@ -1,10 +1,17 @@
 # Production bring-up — `sweptlock-prod` (me-west1)
 
+> **✅ APPLIED 2026-07-22** — all core stacks are up (local `terragrunt run --all apply`, excluding
+> ci-runner). Services run **hello seed images** (real app not deployed yet). Canonical prod state +
+> the full first-apply issue/fix log live in the wiki:
+> `ReferencesContext/sweptlock/wiki/prod-infrastructure.md` and `.../prod-bringup-record.md`.
+> The steps below are the original runbook, kept for the next environment (staging). Deltas learned
+> during the real apply (missing APIs, deletion_protection/stale-cache, `run --all` CLI, hello images,
+> generator-less secrets) are captured in the bring-up record.
+
 This is a **duplication of dev** (`regions/me-west1/dev/`) with production hardening.
 The Terragrunt config in this folder is ready; what remains is the sequence of
 **human-run, credential-gated steps** below (create project, bootstrap auth, fill
-two decisions, apply, seed secrets, wire Firebase + CI). Nothing here has been
-applied — these files only *describe* prod until you run the steps.
+two decisions, apply, seed secrets, wire Firebase + CI).
 
 > Project id: **`sweptlock-prod`** (already the `prod` case in `scripts/bootstrap.sh`).
 > If GCP rejects it as taken, pick a unique id and change it in `env.hcl` **and**
