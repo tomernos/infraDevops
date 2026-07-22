@@ -65,4 +65,10 @@ inputs = {
   # guest-sharing edge stays one-directional (no cycle). See plans/gusturl-infra-plan.md.
   enable_guest_sharing = true
   cleanup_scheduler_sa = "swpt-mw1-prod-sa-cleanup@sweptlock-prod.iam.gserviceaccount.com"
+
+  # KEYLESS Firebase Admin: the org disables downloadable SA keys, so prod does NOT mount a
+  # FIREBASE_ADMIN_SDK_JSON secret — the backend authenticates as the runtime SA via ADC. This also
+  # grants the runtime SA firebaseauth.admin + datastore.user; the Firebase Storage bucket grant is
+  # applied out-of-band after Firebase provisions the bucket. See wiki/04-infra/prod-infrastructure.md.
+  firebase_use_adc = true
 }

@@ -34,6 +34,25 @@ locals {
   guest_secret_env = var.enable_guest_sharing ? {
     DROP_ZONE_JWT_SECRET = "drop-zone-jwt-secret"
   } : {}
+
+  # Base secret env (secret name = "${name_prefix}-<key>"). KEYLESS: when firebase_use_adc is set,
+  # FIREBASE_ADMIN_SDK_JSON is NOT mounted — its absence makes the backend's firebase.js fall through
+  # to Application Default Credentials (the runtime SA). The org disables downloadable SA keys, so
+  # prod runs keyless; dev keeps mounting the JSON.
+  base_secret_env = merge(
+    {
+      DB_HOST                 = "db-host"
+      DB_PORT                 = "db-port"
+      DB_NAME                 = "db-name"
+      DB_USER                 = "db-user"
+      DB_PASSWORD             = "db-password"
+      FIREBASE_STORAGE_BUCKET = "firebase-storage-bucket"
+      FIREBASE_PROJECT_ID     = "firebase-project-id"
+      CORS_ORIGIN             = "cors-origin"
+      ADMIN_EMAIL             = "admin-email"
+    },
+    var.firebase_use_adc ? {} : { FIREBASE_ADMIN_SDK_JSON = "firebase-admin-sdk-json" }
+  )
 }
 
 # ── API Cloud Run service ────────────────────────────────────────────────────
@@ -91,18 +110,7 @@ resource "google_cloud_run_v2_service" "api" {
       # Secrets injected from Secret Manager by convention:
       # secret name = "${name_prefix}-<key>"
       dynamic "env" {
-        for_each = {
-          DB_HOST                 = "db-host"
-          DB_PORT                 = "db-port"
-          DB_NAME                 = "db-name"
-          DB_USER                 = "db-user"
-          DB_PASSWORD             = "db-password"
-          FIREBASE_ADMIN_SDK_JSON = "firebase-admin-sdk-json"
-          FIREBASE_STORAGE_BUCKET = "firebase-storage-bucket"
-          FIREBASE_PROJECT_ID     = "firebase-project-id"
-          CORS_ORIGIN             = "cors-origin"
-          ADMIN_EMAIL             = "admin-email"
-        }
+        for_each = local.base_secret_env
         content {
           name = env.key
           value_source {
@@ -257,3 +265,24 @@ resource "google_cloud_run_v2_service_iam_member" "public_invoker" {
 # NOTE: the CI deploy SA's roles/run.developer grant is owned by scripts/bootstrap.sh
 # (which must create the CI identity out-of-band anyway). It is intentionally NOT
 # managed here to avoid duplicating identity ownership across bootstrap + Terraform.
+
+# ── Keyless Firebase Admin (firebase_use_adc) ────────────────────────────────
+# When the JSON key is NOT mounted, the backend authenticates Firebase Admin as the RUNTIME SA via
+# ADC, so that SA must itself hold the roles the firebase-adminsdk key previously carried:
+#   - firebaseauth.admin  → admin.auth() getUserByEmail / deleteUser (token verify needs no role)
+#   - datastore.user      → admin.firestore() read/write
+# Storage access to the Firebase bucket (admin.storage()) is granted OUT-OF-BAND on the bucket after
+# Firebase provisions it (roles/storage.objectAdmin on the bucket), since the bucket isn't in this TF.
+resource "google_project_iam_member" "runtime_firebase_auth" {
+  count   = var.firebase_use_adc ? 1 : 0
+  project = var.project_id
+  role    = "roles/firebaseauth.admin"
+  member  = "serviceAccount:${var.sa_api_email}"
+}
+
+resource "google_project_iam_member" "runtime_firestore" {
+  count   = var.firebase_use_adc ? 1 : 0
+  project = var.project_id
+  role    = "roles/datastore.user"
+  member  = "serviceAccount:${var.sa_api_email}"
+}

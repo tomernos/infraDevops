@@ -103,3 +103,9 @@ variable "cleanup_scheduler_sa" {
   default     = ""
   description = "Email of the Cloud Scheduler SA allowed to call POST /internal/run-cleanup (OIDC). Empty leaves the guard env unset."
 }
+
+variable "firebase_use_adc" {
+  type        = bool
+  default     = false
+  description = "Keyless Firebase Admin: when true, do NOT mount FIREBASE_ADMIN_SDK_JSON (the backend falls through to ADC = the runtime SA) and grant the runtime SA the Firebase IAM roles. The org disables downloadable SA keys, so prod must run keyless; dev keeps mounting the JSON."
+}
