@@ -110,6 +110,10 @@ gcloud services enable \
   cloudresourcemanager.googleapis.com \
   privateca.googleapis.com \
   firestore.googleapis.com \
+  pubsub.googleapis.com \
+  eventarc.googleapis.com \
+  cloudscheduler.googleapis.com \
+  billingbudgets.googleapis.com \
   --project="$PROJECT_ID" --quiet
 ok "APIs enabled"
 
