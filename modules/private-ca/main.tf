@@ -61,11 +61,11 @@ resource "google_privateca_certificate_authority" "root" {
 resource "google_privateca_ca_pool_iam_member" "requester" {
   for_each = toset(var.certificate_requester_members)
 
-  ca_pool  = google_privateca_ca_pool.pool.name
-  location = var.region
-  project  = var.project_id
-  role     = "roles/privateca.certificateRequester"
-  member   = each.value
+  # .id (projects/../locations/../caPools/..), NOT .name (short) — the IAM member's ca_pool must be
+  # the full resource path or the provider rejects it as an unparseable id.
+  ca_pool = google_privateca_ca_pool.pool.id
+  role    = "roles/privateca.certificateRequester"
+  member  = each.value
 }
 
 # The app's startup CA reachability probe calls caPools.get, which certificateRequester does NOT
@@ -84,9 +84,8 @@ resource "google_project_iam_custom_role" "ca_pool_reader" {
 resource "google_privateca_ca_pool_iam_member" "pool_reader" {
   for_each = toset(var.certificate_requester_members)
 
-  ca_pool  = google_privateca_ca_pool.pool.name
-  location = var.region
-  project  = var.project_id
-  role     = google_project_iam_custom_role.ca_pool_reader.id
-  member   = each.value
+  # Full path via .id (see requester above) — not the short .name.
+  ca_pool = google_privateca_ca_pool.pool.id
+  role    = google_project_iam_custom_role.ca_pool_reader.id
+  member  = each.value
 }
