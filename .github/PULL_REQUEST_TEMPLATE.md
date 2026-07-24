@@ -8,14 +8,19 @@ Closes #
 
 ## Stacks touched
 <!-- List every stack this PR modifies -->
-- [ ] `regions/me-west1/sandbox/networking`
-- [ ] `regions/me-west1/sandbox/security`
-- [ ] `regions/me-west1/sandbox/database`
-- [ ] `regions/me-west1/sandbox/compute`
-- [ ] `regions/me-west1/sandbox/registry`
-- [ ] `regions/me-west1/sandbox/workload-identity`
-- [ ] `regions/me-west1/sandbox/dns`
-- [ ] `regions/me-west1/sandbox/observability`
+- [ ] `regions/me-west1/{dev,prod}/security`
+- [ ] `regions/me-west1/{dev,prod}/networking`
+- [ ] `regions/me-west1/{dev,prod}/database`
+- [ ] `regions/me-west1/{dev,prod}/registry`
+- [ ] `regions/me-west1/{dev,prod}/cloud-run`
+- [ ] `regions/me-west1/{dev,prod}/guest-sharing`
+- [ ] `regions/me-west1/{dev,prod}/watermark`
+- [ ] `regions/me-west1/{dev,prod}/activity-log`
+- [ ] `regions/me-west1/{dev,prod}/deploy-identity-engine`
+- [ ] `regions/me-west1/{dev,prod}/deploy-identity-platform`
+- [ ] `regions/me-west1/{dev,prod}/platform`
+- [ ] `regions/me-west1/{dev,prod}/ci-runner`
+- [ ] `regions/me-west1/prod/private-ca` (prod-only)
 - [ ] `modules/` (shared module change — affects all envs)
 
 ## Risk
@@ -31,4 +36,4 @@ Closes #
 - [ ] `tflint` passes locally
 - [ ] No secrets or sensitive values hardcoded
 - [ ] Destroy operations reviewed and intentional
-- [ ] Module changes tested against sandbox before merging
+- [ ] Module changes: tf-plan checked green on BOTH dev and prod units before merging
