@@ -12,14 +12,18 @@ body:
       label: Stack
       multiple: true
       options:
-        - networking
         - security
+        - networking
         - database
-        - compute
         - registry
-        - workload-identity
-        - dns
-        - observability
+        - cloud-run
+        - guest-sharing
+        - watermark
+        - activity-log
+        - deploy-identity-engine
+        - deploy-identity-platform
+        - platform
+        - ci-runner
         - modules (shared)
     validations:
       required: true
