@@ -16,6 +16,10 @@ inputs = {
   # (out-of-band). Enabled only in dev — sandbox/other envs keep the default (false).
   enable_local_platform_ca_secrets = true
 
+  # KMS + Secret Manager Data Access audit logs (NOW-3 / gap G-03): per-decrypt/per-MAC/
+  # per-secret-access trail. See modules/security/audit.tf for scope decisions.
+  enable_data_access_audit_logs = true
+
   # The drop-zone quarantine bucket + its CORS allowlist are owned solely by the guest-sharing stack
   # now (they used to be duplicated here, which caused permanent CORS drift). See
   # modules/security/storage.tf and modules/guest-sharing/main.tf.
