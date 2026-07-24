@@ -170,6 +170,11 @@ jobs:
 
       - name: "Upload plan artifact"
         if: always()
+        # Best-effort: the artifact is a convenience copy of the plan output, not a gate input
+        # (the PLAN_LINE parsing above reads /tmp/plan-output.txt directly). Without this, an
+        # org-level Actions artifact-storage-quota outage fails every plan job and the
+        # fail-closed apply gate blocks ALL applies on a purely cosmetic upload (2026-07-24).
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: "plan-${{ inputs.environment }}-${{ matrix.module }}"
