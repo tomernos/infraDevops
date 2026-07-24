@@ -1,21 +1,36 @@
+# modules/observability — minimum viable telemetry (AD-9).
+#
+# Provisions: one email notification channel, an HTTPS uptime check on the API
+# health endpoint, and alert policies for uptime failure, Cloud Run 5xx ratio,
+# Cloud SQL down, and Cloud SQL connection saturation.
+#
+# Rewritten 2026-07 for the Cloud Run era. The previous (never-applied) version
+# targeted the retired VM stack — HTTP port-80 check on /api/health, a
+# gce_instance CPU alert — and its uptime alert fired on SUCCESS (COMPARISON_LT
+# on a count-of-failures reducer). History has the old version if needed.
+#
+# SLO strawman this baseline serves (AD-9): API 99.9% monthly · p95 < 400 ms ·
+# sign flow p95 < 2 s. Latency-SLO burn alerts are a deliberate follow-up.
+
+locals {
+  service_host = regex("https://([^/]+)", var.service_url)[0]
+  channel_ids  = [google_monitoring_notification_channel.email.id]
+  sql_enabled  = var.sql_instance_name != ""
+}
+
 # ── Email notification channel ────────────────────────────────────────────────
 
 resource "google_monitoring_notification_channel" "email" {
-  for_each     = toset(var.alert_emails)
-  display_name = "Email — ${each.value}"
+  display_name = "${var.name_prefix}-email-alerts"
   type         = "email"
   project      = var.project_id
 
   labels = {
-    email_address = each.value
+    email_address = var.alert_email
   }
 }
 
-locals {
-  channel_ids = [for ch in google_monitoring_notification_channel.email : ch.id]
-}
-
-# ── Uptime check ──────────────────────────────────────────────────────────────
+# ── Uptime check: API /health over HTTPS ──────────────────────────────────────
 
 resource "google_monitoring_uptime_check_config" "api_health" {
   display_name = "${var.name_prefix}-uptime-api"
@@ -24,10 +39,10 @@ resource "google_monitoring_uptime_check_config" "api_health" {
   project      = var.project_id
 
   http_check {
-    path         = "/api/health"
-    port         = 80
-    use_ssl      = false
-    validate_ssl = false
+    path         = var.health_path
+    port         = 443
+    use_ssl      = true
+    validate_ssl = true
 
     accepted_response_status_codes {
       status_value = 200
@@ -38,12 +53,14 @@ resource "google_monitoring_uptime_check_config" "api_health" {
     type = "uptime_url"
     labels = {
       project_id = var.project_id
-      host       = regex("https?://([^/]+)", var.health_url)[0]
+      host       = local.service_host
     }
   }
 }
 
 # ── Alert: uptime failure ─────────────────────────────────────────────────────
+# Canonical uptime alert shape: REDUCE_COUNT_FALSE counts checker regions whose
+# latest check FAILED; fire when more than one region agrees, for 2 minutes.
 
 resource "google_monitoring_alert_policy" "uptime_failure" {
   display_name = "${var.name_prefix}-alert-uptime-failure"
@@ -52,19 +69,28 @@ resource "google_monitoring_alert_policy" "uptime_failure" {
 
   notification_channels = local.channel_ids
 
+  documentation {
+    content   = "API uptime check on ${var.service_url}${var.health_path} is failing from multiple regions. NOTE: /health is DB-blind — a stopped DB still passes; check Cloud SQL separately."
+    mime_type = "text/markdown"
+  }
+
   conditions {
     display_name = "Uptime check failing"
     condition_threshold {
       filter          = "metric.type=\"monitoring.googleapis.com/uptime_check/check_passed\" resource.type=\"uptime_url\" metric.label.check_id=\"${google_monitoring_uptime_check_config.api_health.uptime_check_id}\""
       duration        = "120s"
-      comparison      = "COMPARISON_LT"
+      comparison      = "COMPARISON_GT"
       threshold_value = 1
 
       aggregations {
-        alignment_period     = "60s"
+        alignment_period     = "300s"
         per_series_aligner   = "ALIGN_NEXT_OLDER"
         cross_series_reducer = "REDUCE_COUNT_FALSE"
         group_by_fields      = ["resource.label.host"]
+      }
+
+      trigger {
+        count = 1
       }
     }
   }
@@ -74,27 +100,44 @@ resource "google_monitoring_alert_policy" "uptime_failure" {
   }
 }
 
-# ── Alert: high API error rate (5xx) ─────────────────────────────────────────
+# ── Alert: Cloud Run 5xx ratio ────────────────────────────────────────────────
+# True error RATIO: 5xx requests over all requests, per service, project-wide
+# (covers the API and the watermark service alike). No traffic → no series → no
+# alert, which is correct for scale-to-zero dev.
 
 resource "google_monitoring_alert_policy" "error_rate" {
-  display_name = "${var.name_prefix}-alert-5xx-rate"
+  display_name = "${var.name_prefix}-alert-5xx-ratio"
   combiner     = "OR"
   project      = var.project_id
 
   notification_channels = local.channel_ids
 
+  documentation {
+    content   = "A Cloud Run service is returning >5% 5xx for 5 minutes. SLO context (AD-9): API 99.9% monthly."
+    mime_type = "text/markdown"
+  }
+
   conditions {
-    display_name = "5xx error rate > 2%"
+    display_name = "5xx ratio > 5% for 5 min"
     condition_threshold {
-      filter          = "metric.type=\"run.googleapis.com/request_count\" resource.type=\"cloud_run_revision\""
-      duration        = "300s"
-      comparison      = "COMPARISON_GT"
-      threshold_value = 0.02
+      filter             = "metric.type=\"run.googleapis.com/request_count\" resource.type=\"cloud_run_revision\" metric.label.response_code_class=\"5xx\""
+      denominator_filter = "metric.type=\"run.googleapis.com/request_count\" resource.type=\"cloud_run_revision\""
+      duration           = "300s"
+      comparison         = "COMPARISON_GT"
+      threshold_value    = 0.05
 
       aggregations {
         alignment_period     = "60s"
         per_series_aligner   = "ALIGN_RATE"
         cross_series_reducer = "REDUCE_SUM"
+        group_by_fields      = ["resource.label.service_name"]
+      }
+
+      denominator_aggregations {
+        alignment_period     = "60s"
+        per_series_aligner   = "ALIGN_RATE"
+        cross_series_reducer = "REDUCE_SUM"
+        group_by_fields      = ["resource.label.service_name"]
       }
     }
   }
@@ -104,26 +147,34 @@ resource "google_monitoring_alert_policy" "error_rate" {
   }
 }
 
-# ── Alert: VM CPU high ────────────────────────────────────────────────────────
+# ── Alert: Cloud SQL down ─────────────────────────────────────────────────────
+# Compensates for the DB-blind /health: the uptime check stays green when the
+# instance is stopped, this fires. Disabled when sql_instance_name = "".
 
-resource "google_monitoring_alert_policy" "vm_cpu" {
-  display_name = "${var.name_prefix}-alert-vm-cpu-high"
+resource "google_monitoring_alert_policy" "sql_down" {
+  count        = local.sql_enabled ? 1 : 0
+  display_name = "${var.name_prefix}-alert-sql-down"
   combiner     = "OR"
   project      = var.project_id
 
   notification_channels = local.channel_ids
 
+  documentation {
+    content   = "Cloud SQL instance ${var.sql_instance_name} reports down. The API /health check will NOT catch this (DB-blind by design)."
+    mime_type = "text/markdown"
+  }
+
   conditions {
-    display_name = "VM CPU > 80% for 10 min"
+    display_name = "database/up < 1 for 5 min"
     condition_threshold {
-      filter          = "metric.type=\"compute.googleapis.com/instance/cpu/utilization\" resource.type=\"gce_instance\" resource.label.project_id=\"${var.project_id}\""
-      duration        = "600s"
-      comparison      = "COMPARISON_GT"
-      threshold_value = 0.80
+      filter          = "metric.type=\"cloudsql.googleapis.com/database/up\" resource.type=\"cloudsql_database\" resource.label.database_id=\"${var.project_id}:${var.sql_instance_name}\""
+      duration        = "300s"
+      comparison      = "COMPARISON_LT"
+      threshold_value = 1
 
       aggregations {
         alignment_period   = "60s"
-        per_series_aligner = "ALIGN_MEAN"
+        per_series_aligner = "ALIGN_MAX"
       }
     }
   }
@@ -133,42 +184,39 @@ resource "google_monitoring_alert_policy" "vm_cpu" {
   }
 }
 
-# ── Budget alert ──────────────────────────────────────────────────────────────
+# ── Alert: Cloud SQL connection saturation ────────────────────────────────────
 
-resource "google_billing_budget" "main" {
-  count           = var.billing_account_id != "" ? 1 : 0
-  billing_account = var.billing_account_id
-  display_name    = "${var.name_prefix}-budget"
+resource "google_monitoring_alert_policy" "sql_connections" {
+  count        = local.sql_enabled ? 1 : 0
+  display_name = "${var.name_prefix}-alert-sql-connections"
+  combiner     = "OR"
+  project      = var.project_id
 
-  budget_filter {
-    projects = ["projects/${var.project_id}"]
+  notification_channels = local.channel_ids
+
+  documentation {
+    content   = "Active backends on ${var.sql_instance_name} exceed ${var.sql_connections_threshold} (max_connections is 100 per modules/database). Look for connection leaks or pool misconfiguration before the hard limit rejects logins."
+    mime_type = "text/markdown"
   }
 
-  amount {
-    specified_amount {
-      currency_code = "USD"
-      units         = tostring(var.monthly_budget_usd)
+  conditions {
+    display_name = "num_backends > ${var.sql_connections_threshold} for 5 min"
+    condition_threshold {
+      filter          = "metric.type=\"cloudsql.googleapis.com/database/postgresql/num_backends\" resource.type=\"cloudsql_database\" resource.label.database_id=\"${var.project_id}:${var.sql_instance_name}\""
+      duration        = "300s"
+      comparison      = "COMPARISON_GT"
+      threshold_value = var.sql_connections_threshold
+
+      aggregations {
+        alignment_period     = "60s"
+        per_series_aligner   = "ALIGN_MEAN"
+        cross_series_reducer = "REDUCE_SUM"
+        group_by_fields      = ["resource.label.database_id"]
+      }
     }
   }
 
-  threshold_rules {
-    threshold_percent = 0.5
-    spend_basis       = "CURRENT_SPEND"
-  }
-
-  threshold_rules {
-    threshold_percent = 0.8
-    spend_basis       = "CURRENT_SPEND"
-  }
-
-  threshold_rules {
-    threshold_percent = 1.0
-    spend_basis       = "CURRENT_SPEND"
-  }
-
-  all_updates_rule {
-    monitoring_notification_channels = local.channel_ids
-    disable_default_iam_recipients   = false
+  alert_strategy {
+    auto_close = "1800s"
   }
 }
-
