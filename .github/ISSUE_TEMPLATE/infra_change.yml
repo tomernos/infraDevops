@@ -24,6 +24,7 @@ body:
         - deploy-identity-platform
         - platform
         - ci-runner
+        - private-ca
         - modules (shared)
     validations:
       required: true
@@ -33,9 +34,10 @@ body:
     attributes:
       label: Environment
       options:
-        - sandbox only
-        - sandbox → dev
-        - sandbox → dev → prod
+        - dev only
+        - dev → prod
+        - prod only
+        - modules (all envs)
     validations:
       required: true
 

@@ -20,6 +20,7 @@ Closes #
 - [ ] `regions/me-west1/{dev,prod}/deploy-identity-platform`
 - [ ] `regions/me-west1/{dev,prod}/platform`
 - [ ] `regions/me-west1/{dev,prod}/ci-runner`
+- [ ] `regions/me-west1/prod/private-ca` (prod-only)
 - [ ] `modules/` (shared module change — affects all envs)
 
 ## Risk
@@ -35,4 +36,4 @@ Closes #
 - [ ] `tflint` passes locally
 - [ ] No secrets or sensitive values hardcoded
 - [ ] Destroy operations reviewed and intentional
-- [ ] Module changes tested against sandbox before merging
+- [ ] Module changes: tf-plan checked green on BOTH dev and prod units before merging
