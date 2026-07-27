@@ -27,6 +27,11 @@ on:
         type: choice
         options: [dev, sandbox, staging, prod]
         required: true
+      use_self_hosted:
+        description: "Run on the Cloud Run self-hosted runner instead of GitHub-hosted"
+        type: boolean
+        required: false
+        default: false
 
 concurrency:
   group: tf-plan-${{ github.head_ref || inputs.environment }}
@@ -101,4 +106,5 @@ jobs:
       environment: ${{ matrix.env }}
       region:      ${{ needs.detect.outputs.region }}
       action:      plan
+      use_self_hosted: ${{ inputs.use_self_hosted || false }}
     secrets: inherit

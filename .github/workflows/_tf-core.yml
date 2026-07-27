@@ -38,6 +38,11 @@ on:
         description: "plan or apply"
         type: string
         default: "plan"
+      use_self_hosted:
+        description: "Route jobs to the Cloud Run self-hosted runner instead of GitHub-hosted"
+        type: boolean
+        required: false
+        default: false
 
 env:
   TF_INPUT: "false"
@@ -48,7 +53,8 @@ jobs:
   # ── 1. setup — resolve project_id from environment name ───────────────────
   setup:
     name: "Resolve project"
-    runs-on: ubuntu-latest
+    # Docker-free (shell/case resolve) — may run on the Cloud Run self-hosted runner.
+    runs-on: ${{ (inputs.use_self_hosted || vars.RUNNER_PREFERENCE == 'self-hosted') && fromJSON('["self-hosted","cloudrun"]') || 'ubuntu-latest' }}
     outputs:
       project_id: ${{ steps.resolve.outputs.project_id }}
     steps:
@@ -71,7 +77,8 @@ jobs:
   discover:
     name: "Discover stacks"
     needs: [setup]
-    runs-on: ubuntu-latest
+    # Docker-free (checkout + find/jq) — may run on the Cloud Run self-hosted runner.
+    runs-on: ${{ (inputs.use_self_hosted || vars.RUNNER_PREFERENCE == 'self-hosted') && fromJSON('["self-hosted","cloudrun"]') || 'ubuntu-latest' }}
     outputs:
       modules: ${{ steps.find.outputs.modules }}
     steps:
@@ -100,7 +107,8 @@ jobs:
   plan:
     name: "Plan — ${{ matrix.module }}"
     needs: [setup, discover]
-    runs-on: ubuntu-latest
+    # Docker-free (terragrunt/terraform plan) — may run on the Cloud Run self-hosted runner.
+    runs-on: ${{ (inputs.use_self_hosted || vars.RUNNER_PREFERENCE == 'self-hosted') && fromJSON('["self-hosted","cloudrun"]') || 'ubuntu-latest' }}
     strategy:
       fail-fast: false
       matrix:
@@ -193,7 +201,8 @@ jobs:
     name: "Summarize"
     needs: [discover, plan]
     if: always() && needs.discover.result == 'success'
-    runs-on: ubuntu-latest
+    # Docker-free (python summary + github-script) — may run on the Cloud Run self-hosted runner.
+    runs-on: ${{ (inputs.use_self_hosted || vars.RUNNER_PREFERENCE == 'self-hosted') && fromJSON('["self-hosted","cloudrun"]') || 'ubuntu-latest' }}
     outputs:
       has_changes: ${{ steps.build.outputs.has_changes }}
       has_destroys: ${{ steps.build.outputs.has_destroys }}
@@ -412,7 +421,8 @@ jobs:
       inputs.action == 'apply' &&
       needs.summarize.result == 'success' &&
       needs.summarize.outputs.has_changes == 'true'
-    runs-on: ubuntu-latest
+    # Docker-free (terragrunt apply) — may run on the Cloud Run self-hosted runner.
+    runs-on: ${{ (inputs.use_self_hosted || vars.RUNNER_PREFERENCE == 'self-hosted') && fromJSON('["self-hosted","cloudrun"]') || 'ubuntu-latest' }}
     environment: ${{ inputs.environment }}
     permissions:
       contents: read
