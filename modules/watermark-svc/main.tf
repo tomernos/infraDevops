@@ -33,6 +33,35 @@ resource "google_secret_manager_secret_iam_member" "watermark_secret_accessor" {
   member    = "serviceAccount:${google_service_account.sa_watermark.email}"
 }
 
+# ── Optional Terraform-seeded first version ──────────────────────────────────
+# The X-WM-Auth shared secret is a pure random bearer token (constant-time compared), so a FRESH env
+# can self-seed it here instead of injecting out-of-band. Gated behind var.seed_shared_secret
+# (default false) — see the rotation-safety note in variables.tf. In every already-live env this
+# stays 0 resources, so TF never moves `latest`. Once a version exists, mount_shared_secret may flip
+# true in the same apply. Generator mirrors modules/database's db_password (special=false to avoid
+# env/shell escaping; 64 chars for bearer-token headroom).
+resource "random_password" "shared_secret" {
+  count   = var.seed_shared_secret ? 1 : 0
+  length  = 64
+  special = false
+}
+
+resource "google_secret_manager_secret_version" "shared_secret" {
+  count       = var.seed_shared_secret ? 1 : 0
+  secret      = google_secret_manager_secret.shared_secret.id
+  secret_data = random_password.shared_secret[0].result
+
+  # Belt-and-suspenders against rotation: random_password.result is create-time and persisted in
+  # state (no later diff) and ignore_changes guarantees TF never re-writes the value. To make an
+  # ALREADY-LIVE env adopt its existing hand-injected version instead of leaving it unmanaged, import
+  # it (does NOT rotate) after setting seed_shared_secret=true so the indexed resource exists:
+  #   terragrunt import 'google_secret_manager_secret_version.shared_secret[0]' \
+  #     "projects/<project>/secrets/<name_prefix>-watermark-shared-secret/versions/<N>"
+  lifecycle {
+    ignore_changes = [secret_data]
+  }
+}
+
 # ── Watermark Cloud Run service ──────────────────────────────────────────────
 resource "google_cloud_run_v2_service" "watermark" {
   name                = "${var.name_prefix}-watermark"
