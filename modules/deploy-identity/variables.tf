@@ -40,6 +40,32 @@ variable "act_as_service_accounts" {
   EOT
 }
 
+variable "act_as_self" {
+  type        = bool
+  default     = false
+  description = <<-EOT
+    Grant the deploy SA roles/iam.serviceAccountUser on ITSELF. Needed ONLY when the workflow runs
+    Cloud Build as the deploy SA (`gcloud builds submit --service-account=<this SA>`): newer Cloud
+    Build defaults the build to the role-stripped Compute default SA and the legacy
+    <projectnumber>@cloudbuild SA is absent, so the build must run as the deploy SA, which requires
+    the SA to actAs itself. Additive (google_service_account_iam_member); default false.
+  EOT
+}
+
+variable "bucket_iam" {
+  type = list(object({
+    bucket = string
+    role   = string
+  }))
+  default     = []
+  description = <<-EOT
+    Additive bucket-scoped IAM (google_storage_bucket_iam_member) for the deploy SA. Example: the
+    Cloud Build source-staging bucket `<project>_cloudbuild` (auto-created by `gcloud builds submit`)
+    needs write access. `bucket` is the GCS bucket NAME only (no `gs://` prefix). Least-priv role for
+    build staging is roles/storage.objectAdmin; roles/storage.admin also works but is broader.
+  EOT
+}
+
 variable "wif_pool_id" {
   type        = string
   default     = ""

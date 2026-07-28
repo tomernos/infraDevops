@@ -47,3 +47,21 @@ resource "google_service_account_iam_member" "wif" {
   role               = "roles/iam.workloadIdentityUser"
   member             = "principalSet://iam.googleapis.com/${local.pool_name}/attribute.repository/${var.github_repo}"
 }
+
+# actAs on ITSELF — only when the workflow runs Cloud Build AS this deploy SA (see var.act_as_self).
+# Additive member (never authoritative), so it cannot remove any other actAs principal on the SA.
+resource "google_service_account_iam_member" "act_as_self" {
+  count              = var.act_as_self ? 1 : 0
+  service_account_id = google_service_account.this.name
+  role               = "roles/iam.serviceAccountUser"
+  member             = "serviceAccount:${google_service_account.this.email}"
+}
+
+# Bucket-scoped grants (e.g. the Cloud Build `<project>_cloudbuild` source-staging bucket). Additive
+# per (bucket, role) member — leaves every other bucket principal untouched.
+resource "google_storage_bucket_iam_member" "bucket" {
+  for_each = { for b in var.bucket_iam : "${b.bucket}:${b.role}" => b }
+  bucket   = each.value.bucket
+  role     = each.value.role
+  member   = "serviceAccount:${google_service_account.this.email}"
+}

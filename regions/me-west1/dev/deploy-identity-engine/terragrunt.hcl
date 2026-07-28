@@ -48,10 +48,39 @@ inputs = {
   project_roles = [
     "roles/artifactregistry.writer", # push container images
     "roles/run.developer",           # deploy Cloud Run services/revisions
+
+    # Keyless frontend deploy: the SAME engine deploy SA also deploys the web app to Firebase Hosting
+    # via WIF (engine _deploy-frontend.yml, keyless — commit 7ad754a). Codifies a grant applied
+    # imperatively during the keyless-frontend work; live-verified 2026-07-28, NOT in the Fable doc.
+    "roles/firebasehosting.admin",
+
+    # ── Self-hosted-runner (Cloud Build) fallback ─────────────────────────────────────────────
+    # The self-hosted Cloud Run runner has no Docker daemon, so under the runner path the backend
+    # image is built via `gcloud builds submit` (backend/cloudbuild.yaml) instead of `docker buildx`.
+    # These three codify the grants applied imperatively in dev on 2026-07-27 (Fable runner-fallback
+    # doc, IAM section). They stay in DEV in Phase 0; Phase 1 moves the build identity to the shared
+    # project — see plans/shared-runner-project-design.md.
+    "roles/cloudbuild.builds.editor",          # create + run Cloud Build builds
+    "roles/serviceusage.serviceUsageConsumer", # `builds submit` staging → serviceusage.services.use
+    "roles/logging.logWriter",                 # CLOUD_LOGGING_ONLY builds write logs directly
   ]
 
   act_as_service_accounts = [
     dependency.security.outputs.sa_api_email,
     dependency.watermark.outputs.sa_email,
+  ]
+
+  # Cloud Build runs AS this deploy SA itself (newer Cloud Build defaults to the role-stripped Compute
+  # default SA; the legacy <projectnumber>@cloudbuild SA is absent here) → deploy SA needs actAs-self.
+  act_as_self = true
+
+  # Cloud Build uploads the build-context tarball to the auto-created <project>_cloudbuild staging
+  # bucket. Codifies the imperative grant (applied as storage.admin; roles/storage.objectAdmin is the
+  # least-priv equivalent — tightening is a tracked follow-up in the design doc, not a Phase-0 change).
+  bucket_iam = [
+    {
+      bucket = "sweptlock-dev-844f2_cloudbuild"
+      role   = "roles/storage.admin"
+    },
   ]
 }
