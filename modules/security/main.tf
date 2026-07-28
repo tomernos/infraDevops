@@ -167,3 +167,36 @@ resource "google_secret_manager_secret" "secrets" {
     tenant = split("-", var.name_prefix)[0]
   }
 }
+
+# ── drop-zone-jwt-secret: optional Terraform-seeded first version ─────────────
+# Most secret CONTAINERS above hold externally-sourced values (db host, firebase JSON, cors origin)
+# that only a human/runbook can supply. drop-zone-jwt-secret is different — it is a pure random
+# HS256 signing key, so a FRESH env can self-seed it instead of running the out-of-band population
+# step. Gated behind var.seed_drop_zone_jwt_secret (default false) — see the rotation-safety note in
+# variables.tf. In every already-live env this stays 0 resources, so TF never moves `latest`.
+#
+# Generator mirrors modules/database's db_password: length 32+, special=false (avoids env/shell
+# escaping when mounted as a plain env value); here 64 for extra signing-key headroom (comment on the
+# container above requires >=32).
+resource "random_password" "drop_zone_jwt_secret" {
+  count   = var.seed_drop_zone_jwt_secret ? 1 : 0
+  length  = 64
+  special = false
+}
+
+resource "google_secret_manager_secret_version" "drop_zone_jwt_secret" {
+  count       = var.seed_drop_zone_jwt_secret ? 1 : 0
+  secret      = google_secret_manager_secret.secrets["drop-zone-jwt-secret"].id
+  secret_data = random_password.drop_zone_jwt_secret[0].result
+
+  # Belt-and-suspenders against rotation: random_password.result is create-time and persisted in
+  # state, so later applies already show no diff — but ignore_changes guarantees TF never re-writes
+  # (rotates) the value even if the seed were regenerated. To make an ALREADY-LIVE prod adopt its
+  # existing hand-injected version instead of leaving it unmanaged, import it (does NOT rotate):
+  #   terragrunt import 'google_secret_manager_secret_version.drop_zone_jwt_secret[0]' \
+  #     "projects/<project>/secrets/<name_prefix>-drop-zone-jwt-secret/versions/<N>"
+  # (set seed_drop_zone_jwt_secret=true first so the indexed resource exists in the config).
+  lifecycle {
+    ignore_changes = [secret_data]
+  }
+}
