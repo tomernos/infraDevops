@@ -25,7 +25,7 @@ on:
       environment:
         description: "Environment to plan"
         type: choice
-        options: [dev, sandbox, staging, prod]
+        options: [dev, sandbox, staging, prod, shared]
         required: true
 
 concurrency:

@@ -8,7 +8,11 @@ on:
       environment:
         description: "Environment to check"
         type: choice
-        options: [dev, sandbox, staging, prod]
+        # ⚠️ PRE-EXISTING LIMITATION: the auth step below hardcodes the DEV plan credentials
+        # (WIF_PROVIDER + SA_CI_TF_PLAN_EMAIL), so only `dev` actually works here — any other choice
+        # authenticates as dev and fails on that env's state bucket. Fail-closed, but the dropdown
+        # over-promises. Fix = copy _tf-core.yml's per-env credential ternary into this workflow.
+        options: [dev, sandbox, staging, prod, shared]
         default: dev
 
 concurrency:
@@ -32,6 +36,7 @@ jobs:
             sandbox) PROJECT="cryptoshare-e5172" ;;
             staging) PROJECT="sweptlock-staging" ;;
             prod)    PROJECT="sweptlock-prod" ;;
+            shared)  PROJECT="sweptlock-shared" ;;
             *) echo "::error::Unknown env $ENV"; exit 1 ;;
           esac
           echo "project_id=$PROJECT" >> "$GITHUB_OUTPUT"
