@@ -33,17 +33,28 @@ The one cross-project binding is `sa-eng-deploy` (dev) → `actAs` on `sa-runner
 
 ## Bring-up (once)
 
+> **⚠️ Order matters: the runner image must exist BEFORE the `ci-runner` apply.** Creating a Cloud Run
+> Job validates that its image is pullable and fails with `Error code 5 … Image not found` otherwise —
+> the Job is then left tainted in state, so the retry is a plain `terragrunt apply` (it replaces it;
+> `deletion_protection = false` allows that). This is why `run --all` is split below.
+
 ```bash
 # 1. project + billing (done manually)
 # 2. bootstrap: state bucket, lean API set, WIF pool, tf plan/apply SAs
 ./scripts/bootstrap.sh shared
 
-# 3. apply (locally as Owner, or via CI once the secrets below exist)
-cd regions/me-west1/shared && terragrunt run --all apply
+# 3. registry FIRST — the image needs somewhere to land
+cd regions/me-west1/shared/registry && terragrunt apply
 
-# 4. publish the runner image into the shared registry
-gh workflow run build-runner-image.yml --ref main --repo SweptLock/sweptlock-engine
+# 4. publish the runner image (see "Publishing the runner image" below)
+
+# 5. now the Job can be created
+cd ../ci-runner && terragrunt apply
 ```
+
+Applying locally as Owner uses the `GOOGLE_OAUTH_ACCESS_TOKEN` pattern:
+`export GOOGLE_OAUTH_ACCESS_TOKEN=$(gcloud auth print-access-token)` covers both the google provider
+and the GCS backend.
 
 For CI to manage this env, add from `bootstrap.sh`'s output:
 
@@ -51,6 +62,37 @@ For CI to manage this env, add from `bootstrap.sh`'s output:
 - a GitHub Environment named `shared` with secret `SA_CI_TF_APPLY_EMAIL`
 
 Without them `_tf-core.yml` fails closed — it never falls back to dev credentials.
+
+## Publishing the runner image
+
+Normally `build-runner-image.yml` (sweptlock-engine) does this. It needs `docker buildx`, so it can
+only run on a **github-hosted** runner — under an exhausted Actions budget, publish out-of-band.
+
+**Cloud Build in this project (server-side; no multi-GB local transfer).** Two non-obvious flags:
+this project's Compute Engine default SA has **zero roles** (org policy strips automatic grants), so
+the build must run as an SA that can write, and specifying a build SA also requires an explicit
+bucket behavior.
+
+```bash
+gcloud services enable cloudbuild.googleapis.com --project=sweptlock-shared
+
+cd <engine>/infra/runner
+gcloud builds submit . --project=sweptlock-shared --timeout=1800 \
+  --service-account=projects/sweptlock-shared/serviceAccounts/swpt-mw1-shared-sa-tf-apply@sweptlock-shared.iam.gserviceaccount.com \
+  --default-buckets-behavior=regional-user-owned-bucket \
+  --tag me-west1-docker.pkg.dev/sweptlock-shared/swpt-mw1-shared-registry/runner:latest
+```
+
+**Fallback — retag the image that already exists in dev** (certain, but pulls/pushes several GB
+through your machine; Docker Desktop is Windows-side, so run it from PowerShell):
+
+```powershell
+gcloud auth configure-docker me-west1-docker.pkg.dev
+docker pull me-west1-docker.pkg.dev/sweptlock-dev-844f2/swpt-mw1-dev-registry/runner:latest
+docker tag  me-west1-docker.pkg.dev/sweptlock-dev-844f2/swpt-mw1-dev-registry/runner:latest `
+            me-west1-docker.pkg.dev/sweptlock-shared/swpt-mw1-shared-registry/runner:latest
+docker push me-west1-docker.pkg.dev/sweptlock-shared/swpt-mw1-shared-registry/runner:latest
+```
 
 ## Starting the runner (each time hosted minutes are unavailable)
 
