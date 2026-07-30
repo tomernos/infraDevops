@@ -14,7 +14,7 @@ SERVICE    := $(PREFIX)-api
 # Source path of the backend (on WSL)
 BACKEND_DIR ?= /mnt/c/Users/tomer/Desktop/PersonalGitProjects/Sweptlock/backend
 
-.PHONY: help init plan apply destroy \
+.PHONY: help preflight init plan apply destroy \
         apply-security apply-registry apply-networking apply-database \
         apply-deploy-engine apply-deploy-platform apply-cloud-run apply-platform \
         build push deploy \
@@ -30,6 +30,7 @@ help:
 	@echo "    make bootstrap ENV=dev     Run once: create GCS bucket + WIF + SAs"
 	@echo ""
 	@echo "  Terraform (all stacks)"
+	@echo "    make preflight             Read-only pre-apply gate: versions, auth, project, state bucket, runner image"
 	@echo "    make init                  terragrunt run --all init"
 	@echo "    make plan                  terragrunt run --all plan"
 	@echo "    make apply                 Apply all stacks in dependency order"
@@ -61,6 +62,13 @@ help:
 # ── Bootstrap ────────────────────────────────────────────────────────────────
 bootstrap:
 	./scripts/bootstrap.sh $(ENV)
+
+# ── Preflight ────────────────────────────────────────────────────────────────
+# Read-only gate before any local apply. Catches the failure modes that have
+# actually burned applies: version-pin skew, expired auth, wrong ambient
+# project, unreachable state bucket, missing runner image, half-run bootstrap.
+preflight:
+	./scripts/preflight.sh $(ENV)
 
 # ── Terraform: all stacks ────────────────────────────────────────────────────
 init:

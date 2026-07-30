@@ -78,11 +78,12 @@ add required reviewers. `tf-apply.yml` will not apply prod without this approval
 
 ### 5. Apply the stacks (dependency order handled by Terragrunt)
 Prefer the pipeline: **Actions → "Terraform Apply" → Run workflow → environment:
-`prod`** (plans, waits for your `prod` Environment approval, then applies). Or locally:
+`prod`** (plans, waits for your `prod` Environment approval, then applies). Or locally
+(run `make preflight ENV=prod` first):
 ```bash
 cd regions/me-west1/prod
-terragrunt run-all plan
-terragrunt run-all apply
+terragrunt run --all plan --non-interactive
+terragrunt run --all apply --non-interactive -- -auto-approve
 ```
 Dependency DAG (Terragrunt orders it): `security → networking →
 {registry, database, watermark, activity-log} → cloud-run → guest-sharing →
