@@ -63,25 +63,41 @@ For CI to manage this env, add from `bootstrap.sh`'s output:
 
 Without them `_tf-core.yml` fails closed — it never falls back to dev credentials.
 
+> **⚠️ Bootstrap caveat, observed 2026-07-30.** The first `bootstrap.sh shared` run stopped part-way:
+> the state bucket, API set, WIF pool and both SAs were created, and the **plan** SA got
+> `viewer` + `iam.securityReviewer` — but the **apply** SA (`swpt-mw1-shared-sa-tf-apply`) ended with
+> **zero** project bindings and no `storage.admin` on the state bucket. Local Owner applies hide this
+> (they don't use that SA), so it only bites the first CI-driven apply. The script is idempotent —
+> re-run `./scripts/bootstrap.sh shared` and then VERIFY, don't assume:
+> ```bash
+> gcloud projects get-iam-policy sweptlock-shared --flatten="bindings[].members" \
+>   --format="table(bindings.members,bindings.role)" | grep tf-apply   # expect editor + 4 more
+> gsutil iam get gs://swpt-mw1-infra-shared-tf | grep -A2 tf-apply     # expect storage.admin
+> ```
+
 ## Publishing the runner image
 
 Normally `build-runner-image.yml` (sweptlock-engine) does this. It needs `docker buildx`, so it can
 only run on a **github-hosted** runner — under an exhausted Actions budget, publish out-of-band.
 
-**Cloud Build in this project (server-side; no multi-GB local transfer).** Two non-obvious flags:
-this project's Compute Engine default SA has **zero roles** (org policy strips automatic grants), so
-the build must run as an SA that can write, and specifying a build SA also requires an explicit
-bucket behavior.
+**Cloud Build in this project (server-side; no multi-GB local transfer).**
 
 ```bash
 gcloud services enable cloudbuild.googleapis.com --project=sweptlock-shared
 
 cd <engine>/infra/runner
 gcloud builds submit . --project=sweptlock-shared --timeout=1800 \
-  --service-account=projects/sweptlock-shared/serviceAccounts/swpt-mw1-shared-sa-tf-apply@sweptlock-shared.iam.gserviceaccount.com \
-  --default-buckets-behavior=regional-user-owned-bucket \
   --tag me-west1-docker.pkg.dev/sweptlock-shared/swpt-mw1-shared-registry/runner:latest
 ```
+
+No `--service-account` needed: this project has the legacy Cloud Build SA
+(`<projectnumber>@cloudbuild.gserviceaccount.com`) with `roles/cloudbuild.builds.builder`, which
+carries `artifactregistry.repositories.uploadArtifacts`. Verify before adding flags —
+`gcloud projects get-iam-policy sweptlock-shared | grep cloudbuild`. Only if that SA is absent or
+role-stripped (the situation in **dev**, which is why PR #69 had to work around it) do you need
+`--service-account=<an SA that can write>` **plus**
+`--default-buckets-behavior=regional-user-owned-bucket` (naming a build SA makes the default logs
+bucket unusable). Do **not** reach for `swpt-mw1-shared-sa-tf-apply` — see the bootstrap caveat below.
 
 **Fallback — retag the image that already exists in dev** (certain, but pulls/pushes several GB
 through your machine; Docker Desktop is Windows-side, so run it from PowerShell):
