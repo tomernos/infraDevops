@@ -82,8 +82,11 @@ locals {
 resource "google_service_account" "sa_runner" {
   account_id   = "${var.name_prefix}-sa-runner"
   display_name = "Sweptlock CI build runner"
-  description  = "Identity for the Cloud Run Job GitHub runner (no GCP perms needed)"
-  project      = var.project_id
+  # Mode-derived so it stays accurate for both shapes AND renders byte-identical to the pre-existing
+  # dev/prod value ("… ephemeral Cloud Run Job …") — a literal edit here would plan an in-place update
+  # on every already-applied env for nothing.
+  description = "Identity for the ${var.runner_mode} Cloud Run Job GitHub runner (no GCP perms needed)"
+  project     = var.project_id
 }
 
 # Let the executor SA run this Job AS sa_runner. This is the ONLY new IAM: the deploy SA already
