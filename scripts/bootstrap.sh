@@ -35,7 +35,10 @@ case "$ENV" in
   dev)     PROJECT_ID="sweptlock-dev-844f2" ;;
   staging) PROJECT_ID="sweptlock-staging" ;;
   prod)    PROJECT_ID="sweptlock-prod" ;;
-  *) echo "Unknown env '${ENV}'. Valid: dev | staging | prod"; exit 1 ;;
+  # Central shared-services project — CI runner compute (Artifact Registry + Cloud Run runner Job)
+  # today, more later. Compute-only: gets a LEAN API + apply-SA role set below (no SQL/VPC/KMS/etc.).
+  shared)  PROJECT_ID="sweptlock-shared" ;;
+  *) echo "Unknown env '${ENV}'. Valid: dev | staging | prod | shared"; exit 1 ;;
 esac
 
 TENANT="swpt"
@@ -93,28 +96,45 @@ gcloud config set project "$PROJECT_ID" --quiet
 
 section "GCP APIs"
 info "Enabling APIs (may take ~60s on first run)..."
-gcloud services enable \
-  compute.googleapis.com \
-  run.googleapis.com \
-  sqladmin.googleapis.com \
-  servicenetworking.googleapis.com \
-  cloudkms.googleapis.com \
-  secretmanager.googleapis.com \
-  artifactregistry.googleapis.com \
-  dns.googleapis.com \
-  iam.googleapis.com \
-  iamcredentials.googleapis.com \
-  sts.googleapis.com \
-  logging.googleapis.com \
-  monitoring.googleapis.com \
-  cloudresourcemanager.googleapis.com \
-  privateca.googleapis.com \
-  firestore.googleapis.com \
-  pubsub.googleapis.com \
-  eventarc.googleapis.com \
-  cloudscheduler.googleapis.com \
-  billingbudgets.googleapis.com \
-  --project="$PROJECT_ID" --quiet
+if [ "$ENV" = "shared" ]; then
+  # Central shared-services project = compute only (Artifact Registry + Cloud Run runner Job;
+  # Cloud Build added in Phase 2). No SQL/VPC/KMS/PubSub/CA/Firestore/DNS/secrets live here.
+  APIS=(
+    run.googleapis.com
+    artifactregistry.googleapis.com
+    iam.googleapis.com
+    iamcredentials.googleapis.com
+    sts.googleapis.com
+    serviceusage.googleapis.com
+    logging.googleapis.com
+    monitoring.googleapis.com
+    cloudresourcemanager.googleapis.com
+  )
+else
+  APIS=(
+    compute.googleapis.com
+    run.googleapis.com
+    sqladmin.googleapis.com
+    servicenetworking.googleapis.com
+    cloudkms.googleapis.com
+    secretmanager.googleapis.com
+    artifactregistry.googleapis.com
+    dns.googleapis.com
+    iam.googleapis.com
+    iamcredentials.googleapis.com
+    sts.googleapis.com
+    logging.googleapis.com
+    monitoring.googleapis.com
+    cloudresourcemanager.googleapis.com
+    privateca.googleapis.com
+    firestore.googleapis.com
+    pubsub.googleapis.com
+    eventarc.googleapis.com
+    cloudscheduler.googleapis.com
+    billingbudgets.googleapis.com
+  )
+fi
+gcloud services enable "${APIS[@]}" --project="$PROJECT_ID" --quiet
 ok "APIs enabled"
 
 # ── 2. State bucket ───────────────────────────────────────────────────────────
@@ -215,16 +235,29 @@ bind_project "$SA_PLAN_EMAIL"  "roles/iam.securityReviewer"
 #   - cloudkms.admin             → set IAM policy on the KMS trust-DEK key (security module)
 #   - servicenetworking.networksAdmin → create the private services VPC peering (networking module)
 # Use granular roles in staging/prod instead of editor.
-bind_project "$SA_APPLY_EMAIL" "roles/editor"
-bind_project "$SA_APPLY_EMAIL" "roles/resourcemanager.projectIamAdmin"
-# editor cannot setIamPolicy on these resource types — grant the service admin role:
-bind_project "$SA_APPLY_EMAIL" "roles/cloudkms.admin"               # KMS key IAM (security)
-bind_project "$SA_APPLY_EMAIL" "roles/servicenetworking.networksAdmin" # VPC peering (networking)
-bind_project "$SA_APPLY_EMAIL" "roles/artifactregistry.admin"       # repo IAM (registry)
-bind_project "$SA_APPLY_EMAIL" "roles/run.admin"                    # service IAM/public-invoker (cloud-run)
-bind_project "$SA_APPLY_EMAIL" "roles/pubsub.admin"                 # topic/sub IAM (activity-log)
-bind_project "$SA_APPLY_EMAIL" "roles/secretmanager.admin"          # secret IAM (platform secretAccessor grants)
-bind_bucket  "$SA_APPLY_EMAIL" "roles/storage.admin"
+if [ "$ENV" = "shared" ]; then
+  # Lean apply-SA roles for the compute-only shared project. Its TF creates a registry + a Cloud Run
+  # runner Job + the runner SA and their IAM. No KMS/VPC/PubSub/Secrets here. NOTE: unlike dev, there
+  # is no security stack to grant serviceAccountAdmin, so bootstrap grants it here (needed for the
+  # module's serviceAccountUser binding on sa-runner).
+  bind_project "$SA_APPLY_EMAIL" "roles/editor"
+  bind_project "$SA_APPLY_EMAIL" "roles/resourcemanager.projectIamAdmin" # project-level setIamPolicy
+  bind_project "$SA_APPLY_EMAIL" "roles/iam.serviceAccountAdmin"         # SA-level IAM (actAs on sa-runner)
+  bind_project "$SA_APPLY_EMAIL" "roles/artifactregistry.admin"          # repo IAM (registry reader grants)
+  bind_project "$SA_APPLY_EMAIL" "roles/run.admin"                       # runner Job IAM
+  bind_bucket  "$SA_APPLY_EMAIL" "roles/storage.admin"
+else
+  bind_project "$SA_APPLY_EMAIL" "roles/editor"
+  bind_project "$SA_APPLY_EMAIL" "roles/resourcemanager.projectIamAdmin"
+  # editor cannot setIamPolicy on these resource types — grant the service admin role:
+  bind_project "$SA_APPLY_EMAIL" "roles/cloudkms.admin"               # KMS key IAM (security)
+  bind_project "$SA_APPLY_EMAIL" "roles/servicenetworking.networksAdmin" # VPC peering (networking)
+  bind_project "$SA_APPLY_EMAIL" "roles/artifactregistry.admin"       # repo IAM (registry)
+  bind_project "$SA_APPLY_EMAIL" "roles/run.admin"                    # service IAM/public-invoker (cloud-run)
+  bind_project "$SA_APPLY_EMAIL" "roles/pubsub.admin"                 # topic/sub IAM (activity-log)
+  bind_project "$SA_APPLY_EMAIL" "roles/secretmanager.admin"          # secret IAM (platform secretAccessor grants)
+  bind_bucket  "$SA_APPLY_EMAIL" "roles/storage.admin"
+fi
 
 # NOTE: the per-component DEPLOY SAs (engine, platform) and their roles / actAs / WIF bindings are
 # Terraform-managed in modules/ci-identity — NOT here. sa-tf-apply (above) has the projectIamAdmin +

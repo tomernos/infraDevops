@@ -12,3 +12,8 @@ output "runner_image" {
   value       = local.runner_image
   description = "Full Artifact Registry image URL the job runs"
 }
+
+output "executor_sa_email" {
+  value       = local.executor_sa_email
+  description = "SA granted actAs on sa-runner — i.e. the identity allowed to execute the Job"
+}

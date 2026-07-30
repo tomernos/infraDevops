@@ -14,14 +14,20 @@ name: "TF Core (reusable)"
 # Both plan and apply auto-detect affected envs in the parent workflow.
 # project_id is resolved here per env name — single source of truth.
 #
-# Required secrets (per-env isolation — dev credentials never reach prod):
-#   Repo (dev / shared):   WIF_PROVIDER, SA_CI_TF_PLAN_EMAIL
-#   Repo (prod):           WIF_PROVIDER_PROD, SA_CI_TF_PLAN_EMAIL_PROD
-#   Env (each env):        SA_CI_TF_APPLY_EMAIL  (+ required reviewers under env protection)
-# The plan job is NOT env-bound, so plan creds MUST be repo-level; it selects the _PROD pair for
-# prod. The apply job binds `environment:`, so its apply SA is env-scoped; the WIF provider is
-# selected per env like the plan job. prod maps ONLY to _PROD (no dev fallback) — a missing prod
-# secret resolves to '' and the fail-closed guard aborts the run.
+# Required secrets (per-env isolation — one env's credentials never reach another):
+#   Repo (dev, the default pair): WIF_PROVIDER, SA_CI_TF_PLAN_EMAIL
+#   Repo (prod):                  WIF_PROVIDER_PROD, SA_CI_TF_PLAN_EMAIL_PROD
+#   Repo (shared CI project):     WIF_PROVIDER_SHARED, SA_CI_TF_PLAN_EMAIL_SHARED
+#   Env (each env):               SA_CI_TF_APPLY_EMAIL  (+ required reviewers under env protection)
+# The plan job is NOT env-bound, so plan creds MUST be repo-level; it selects the suffixed pair per
+# env. The apply job binds `environment:`, so its apply SA is env-scoped; the WIF provider is
+# selected per env like the plan job. Every env other than dev maps ONLY to its own suffix (no dev
+# fallback) — a missing secret resolves to '' and the fail-closed guard aborts the run.
+#
+# ADDING AN ENV is three edits in this file (project case + the two credential maps) plus the
+# `options:` list in tf-plan/tf-apply/tf-destroy/drift-detect. The parent workflow's change-detection
+# finds new env FOLDERS on its own, so a folder added without these edits fails closed rather than
+# planning with the wrong project's credentials.
 
 on:
   workflow_call:
@@ -60,6 +66,7 @@ jobs:
             sandbox) PROJECT="cryptoshare-e5172" ;;
             staging) PROJECT="sweptlock-staging" ;;
             prod)    PROJECT="sweptlock-prod" ;;
+            shared)  PROJECT="sweptlock-shared" ;;   # central CI runner compute (no app services)
             *)
               echo "::error::Unknown environment '${{ inputs.environment }}' — add a case here when adding a new env"
               exit 1 ;;
@@ -111,17 +118,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Per-env CI identity (fail-closed): dev uses the shared repo secrets; prod uses the _PROD
-      # repo secrets. prod maps ONLY to _PROD (no dev fallback), so a missing prod secret resolves
-      # to '' and the guard aborts — dev creds can never reach prod. (sandbox/staging map to '' too
-      # until their own secrets are added.)
+      # Per-env CI identity (fail-closed): dev uses the unsuffixed repo secrets; every other env maps
+      # ONLY to its own suffixed pair (no dev fallback), so a missing secret resolves to '' and the
+      # guard aborts — dev creds can never reach prod or the shared CI project. (sandbox/staging map
+      # to '' too until their own secrets are added.)
       - name: "Resolve plan credentials for ${{ inputs.environment }}"
         env:
-          WIF: ${{ (inputs.environment == 'dev' && secrets.WIF_PROVIDER) || (inputs.environment == 'prod' && secrets.WIF_PROVIDER_PROD) || '' }}
-          SA:  ${{ (inputs.environment == 'dev' && secrets.SA_CI_TF_PLAN_EMAIL) || (inputs.environment == 'prod' && secrets.SA_CI_TF_PLAN_EMAIL_PROD) || '' }}
+          WIF: ${{ (inputs.environment == 'dev' && secrets.WIF_PROVIDER) || (inputs.environment == 'prod' && secrets.WIF_PROVIDER_PROD) || (inputs.environment == 'shared' && secrets.WIF_PROVIDER_SHARED) || '' }}
+          SA:  ${{ (inputs.environment == 'dev' && secrets.SA_CI_TF_PLAN_EMAIL) || (inputs.environment == 'prod' && secrets.SA_CI_TF_PLAN_EMAIL_PROD) || (inputs.environment == 'shared' && secrets.SA_CI_TF_PLAN_EMAIL_SHARED) || '' }}
         run: |
           if [ -z "$WIF" ] || [ -z "$SA" ]; then
-            echo "::error::No plan credentials for env '${{ inputs.environment }}'. For prod, set repo secrets WIF_PROVIDER_PROD + SA_CI_TF_PLAN_EMAIL_PROD."
+            echo "::error::No plan credentials for env '${{ inputs.environment }}'. Set the repo secret pair for it: prod → WIF_PROVIDER_PROD + SA_CI_TF_PLAN_EMAIL_PROD; shared → WIF_PROVIDER_SHARED + SA_CI_TF_PLAN_EMAIL_SHARED (values are bootstrap.sh's output for that project)."
             exit 1
           fi
           echo "TF_WIF=$WIF" >> "$GITHUB_ENV"
@@ -422,14 +429,15 @@ jobs:
 
       # Per-env CI identity (fail-closed). The apply SA stays ENVIRONMENT-scoped (this job binds
       # `environment: <env>`), so SA_CI_TF_APPLY_EMAIL resolves to that env's value. The WIF
-      # provider is selected per env like the plan job; prod maps ONLY to _PROD (no dev fallback).
+      # provider is selected per env like the plan job; every env but dev maps ONLY to its own
+      # suffixed secret (no dev fallback).
       - name: "Resolve apply credentials for ${{ inputs.environment }}"
         env:
-          WIF: ${{ (inputs.environment == 'dev' && secrets.WIF_PROVIDER) || (inputs.environment == 'prod' && secrets.WIF_PROVIDER_PROD) || '' }}
+          WIF: ${{ (inputs.environment == 'dev' && secrets.WIF_PROVIDER) || (inputs.environment == 'prod' && secrets.WIF_PROVIDER_PROD) || (inputs.environment == 'shared' && secrets.WIF_PROVIDER_SHARED) || '' }}
           SA:  ${{ secrets.SA_CI_TF_APPLY_EMAIL }}
         run: |
           if [ -z "$WIF" ] || [ -z "$SA" ]; then
-            echo "::error::No apply credentials for env '${{ inputs.environment }}'. Set WIF_PROVIDER_PROD (repo) + SA_CI_TF_APPLY_EMAIL (on the '${{ inputs.environment }}' Environment)."
+            echo "::error::No apply credentials for env '${{ inputs.environment }}'. Set this env's repo WIF secret (prod → WIF_PROVIDER_PROD, shared → WIF_PROVIDER_SHARED) + SA_CI_TF_APPLY_EMAIL on the '${{ inputs.environment }}' Environment."
             exit 1
           fi
           echo "TF_WIF=$WIF" >> "$GITHUB_ENV"
