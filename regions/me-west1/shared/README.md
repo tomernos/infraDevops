@@ -63,7 +63,15 @@ For CI to manage this env, add from `bootstrap.sh`'s output:
 
 Without them `_tf-core.yml` fails closed — it never falls back to dev credentials.
 
-> **⚠️ Bootstrap caveat, observed 2026-07-30.** The first `bootstrap.sh shared` run stopped part-way:
+**Status: LIVE and PROVEN (2026-07-30).** Registry + `sa-runner` + cross-project actAs + the runner
+Job are all applied; the image is published; the runner registered as `cloudrun-shared` with labels
+`[self-hosted, Linux, X64, cloudrun]`; and a full dev backend deploy ran end-to-end on it — run
+`30534743368`, all five jobs (`preflight → build → approve → migrate → deploy`) on `cloudrun-shared`,
+zero hosted Actions minutes, live revision `swpt-mw1-dev-api-00045-tb4`, `/health` and `/health/ready`
+both 200. Afterwards the execution was cancelled and dev Cloud SQL returned to `NEVER`.
+
+> **⚠️ Bootstrap caveat, observed 2026-07-30 (since RESOLVED by a re-run).** The first
+> `bootstrap.sh shared` run stopped part-way:
 > the state bucket, API set, WIF pool and both SAs were created, and the **plan** SA got
 > `viewer` + `iam.securityReviewer` — but the **apply** SA (`swpt-mw1-shared-sa-tf-apply`) ended with
 > **zero** project bindings and no `storage.admin` on the state bucket. Local Owner applies hide this
@@ -80,24 +88,37 @@ Without them `_tf-core.yml` fails closed — it never falls back to dev credenti
 Normally `build-runner-image.yml` (sweptlock-engine) does this. It needs `docker buildx`, so it can
 only run on a **github-hosted** runner — under an exhausted Actions budget, publish out-of-band.
 
-**Cloud Build in this project (server-side; no multi-GB local transfer).**
+**Cloud Build (server-side; no multi-GB local transfer). This exact command is PROVEN — build
+`f8488750`, 2026-07-30.** It runs in the **dev** project as the dev engine deploy SA and pushes into
+this registry, which is the same identity and direction `build-runner-image.yml` uses — so it also
+validates the `extra_writer_sa_emails` grant.
 
 ```bash
-gcloud services enable cloudbuild.googleapis.com --project=sweptlock-shared
-
 cd <engine>/infra/runner
-gcloud builds submit . --project=sweptlock-shared --timeout=1800 \
+gcloud builds submit . \
+  --project=sweptlock-dev-844f2 \
+  --service-account=projects/sweptlock-dev-844f2/serviceAccounts/swpt-mw1-dev-sa-eng-deploy@sweptlock-dev-844f2.iam.gserviceaccount.com \
+  --gcs-source-staging-dir=gs://sweptlock-dev-844f2_cloudbuild/source \
+  --gcs-log-dir=gs://sweptlock-dev-844f2_cloudbuild/logs \
+  --timeout=1800 --async \
   --tag me-west1-docker.pkg.dev/sweptlock-shared/swpt-mw1-shared-registry/runner:latest
 ```
 
-No `--service-account` needed: this project has the legacy Cloud Build SA
-(`<projectnumber>@cloudbuild.gserviceaccount.com`) with `roles/cloudbuild.builds.builder`, which
-carries `artifactregistry.repositories.uploadArtifacts`. Verify before adding flags —
-`gcloud projects get-iam-policy sweptlock-shared | grep cloudbuild`. Only if that SA is absent or
-role-stripped (the situation in **dev**, which is why PR #69 had to work around it) do you need
-`--service-account=<an SA that can write>` **plus**
-`--default-buckets-behavior=regional-user-owned-bucket` (naming a build SA makes the default logs
-bucket unusable). Do **not** reach for `swpt-mw1-shared-sa-tf-apply` — see the bootstrap caveat below.
+Takes ~8 min (it downloads the Android SDK + NDK). Poll with
+`gcloud builds describe <id> --project=sweptlock-dev-844f2 --format='value(status)'`.
+
+> **Why not a plain `gcloud builds submit` in this project?** Tried, and it fails:
+> ```
+> INVALID_ARGUMENT: could not resolve source: … 1090308823904-compute@developer.gserviceaccount.com
+> does not have storage.objects.get access to … sweptlock-shared_cloudbuild/objects/source/…
+> ```
+> Cloud Build defaults the build to the **Compute Engine default SA**, which is role-stripped org-wide.
+> The presence of the legacy `<projectnumber>@cloudbuild.gserviceaccount.com` with
+> `roles/cloudbuild.builds.builder` does **not** make it the default — don't be fooled by finding it in
+> the IAM policy. If you do want to build in-project, pass `--service-account=<an SA that can write>`
+> **plus** `--default-buckets-behavior=regional-user-owned-bucket` (naming a build SA makes the default
+> logs bucket unusable). Note `PERMISSION_DENIED: The caller does not have permission` while you are
+> Owner and `builds list` works = the BUILD identity is wrong, not yours.
 
 **Fallback — retag the image that already exists in dev** (certain, but pulls/pushes several GB
 through your machine; Docker Desktop is Windows-side, so run it from PowerShell):
