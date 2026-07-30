@@ -8,10 +8,8 @@ on:
       environment:
         description: "Environment to check"
         type: choice
-        # ⚠️ PRE-EXISTING LIMITATION: the auth step below hardcodes the DEV plan credentials
-        # (WIF_PROVIDER + SA_CI_TF_PLAN_EMAIL), so only `dev` actually works here — any other choice
-        # authenticates as dev and fails on that env's state bucket. Fail-closed, but the dropdown
-        # over-promises. Fix = copy _tf-core.yml's per-env credential ternary into this workflow.
+        # Credentials resolve per env (see the drift job) and fail closed for any env whose secret
+        # pair is not set — currently sandbox/staging.
         options: [dev, sandbox, staging, prod, shared]
         default: dev
 
@@ -54,11 +52,26 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Per-env CI identity (fail-closed), mirroring _tf-core.yml. Previously this job hardcoded the
+      # DEV pair, so selecting any other env authenticated as dev and died on that env's state
+      # bucket — the dropdown offered envs this job could never check.
+      - name: "Resolve plan credentials for ${{ needs.setup.outputs.env_name }}"
+        env:
+          WIF: ${{ (needs.setup.outputs.env_name == 'dev' && secrets.WIF_PROVIDER) || (needs.setup.outputs.env_name == 'prod' && secrets.WIF_PROVIDER_PROD) || (needs.setup.outputs.env_name == 'shared' && secrets.WIF_PROVIDER_SHARED) || '' }}
+          SA: ${{ (needs.setup.outputs.env_name == 'dev' && secrets.SA_CI_TF_PLAN_EMAIL) || (needs.setup.outputs.env_name == 'prod' && secrets.SA_CI_TF_PLAN_EMAIL_PROD) || (needs.setup.outputs.env_name == 'shared' && secrets.SA_CI_TF_PLAN_EMAIL_SHARED) || '' }}
+        run: |
+          if [ -z "$WIF" ] || [ -z "$SA" ]; then
+            echo "::error::No plan credentials for env '${{ needs.setup.outputs.env_name }}'. Set its repo secret pair (prod → WIF_PROVIDER_PROD + SA_CI_TF_PLAN_EMAIL_PROD; shared → WIF_PROVIDER_SHARED + SA_CI_TF_PLAN_EMAIL_SHARED)."
+            exit 1
+          fi
+          echo "TF_WIF=$WIF" >> "$GITHUB_ENV"
+          echo "TF_SA=$SA"   >> "$GITHUB_ENV"
+
       - name: "Setup Terraform + Terragrunt + GCP auth"
         uses: ./.github/actions/tf-setup
         with:
-          service-account: ${{ secrets.SA_CI_TF_PLAN_EMAIL }}
-          wif-provider:    ${{ secrets.WIF_PROVIDER }}
+          service-account: ${{ env.TF_SA }}
+          wif-provider:    ${{ env.TF_WIF }}
           project-id:      ${{ needs.setup.outputs.project_id }}
 
       - name: "Run plan"
