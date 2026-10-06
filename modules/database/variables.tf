@@ -43,14 +43,3 @@ variable "deletion_protection" {
   default = true
   description = "Set false in sandbox to allow terraform destroy"
 }
-
-variable "activation_policy" {
-  type        = string
-  default     = "ALWAYS"
-  description = "ALWAYS = running. NEVER = stopped (parked): no compute billing, storage and backups are kept. Codified so an apply never silently starts a parked instance, or stops a running one."
-
-  validation {
-    condition     = contains(["ALWAYS", "NEVER"], var.activation_policy)
-    error_message = "activation_policy must be ALWAYS or NEVER."
-  }
-}

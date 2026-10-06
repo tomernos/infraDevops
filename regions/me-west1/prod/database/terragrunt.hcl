@@ -27,8 +27,8 @@ inputs = {
   pitr_enabled        = true # point-in-time recovery
   deletion_protection = true # block accidental prod DB destroy
 
-  # PARKED: prod is not launched; the instance is stopped to avoid compute billing (storage +
-  # backups kept). This records the live state so an unrelated prod apply cannot start it. Flip to
-  # "ALWAYS" in the change that launches prod.
-  activation_policy = "NEVER"
+  # PARKED: prod is not launched; the instance is stopped (activation_policy NEVER) to avoid compute
+  # billing, with storage + backups kept. The module ignores power state, so applies never start it.
+  # Start it with `gcloud sql instances patch swpt-mw1-prod-sql-main --activation-policy=ALWAYS` in
+  # the launch runbook (PROD-BRINGUP.md).
 }

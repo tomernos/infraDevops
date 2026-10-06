@@ -23,8 +23,8 @@ production, and exactly which code/variables/IAM change.
 > **PARKED (recorded 2026-10-06):** the prod root CA was disabled 2026-07-31 and deleted 2026-08-08
 > (audit log, principal eladrz@), presumably to stop CA billing before launch. The pool remains.
 > `private-ca` now has `root_ca_enabled = false` so a prod apply no longer recreates a root as a side
-> effect. Prod `database` is likewise stopped (`activation_policy = "NEVER"`). Un-park both in the
-> launch change.
+> effect. Prod `database` is likewise stopped; the database module ignores power state, so
+> applies never start it. Un-park both in the launch change.
 
 ## What the Platform CA is (and is NOT)
 - **Is:** the issuer of short-lived end-entity certs used to sign users' PDFs

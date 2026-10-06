@@ -14,7 +14,6 @@ resource "google_sql_database_instance" "main" {
 
   settings {
     tier              = var.tier
-    activation_policy = var.activation_policy
     availability_type = var.ha_enabled ? "REGIONAL" : "ZONAL"
     disk_size         = var.disk_size_gb
     disk_type         = "PD_SSD"
@@ -56,6 +55,16 @@ resource "google_sql_database_instance" "main" {
       name  = "max_connections"
       value = "100"
     }
+  }
+
+  # Power state (activation_policy ALWAYS = running, NEVER = stopped) is an OPERATIONAL control, not
+  # configuration: DEV is started and stopped by hand around working hours to save cost, and PROD is
+  # parked (stopped) until launch. The provider defaults the field to ALWAYS, so without this every
+  # apply would silently START a stopped instance (dev: mid-routine; prod: billed HA instance).
+  # Same reasoning as the CI-owned image on Cloud Run. Start/stop with
+  # `gcloud sql instances patch <name> --activation-policy=ALWAYS|NEVER`.
+  lifecycle {
+    ignore_changes = [settings[0].activation_policy]
   }
 }
 
