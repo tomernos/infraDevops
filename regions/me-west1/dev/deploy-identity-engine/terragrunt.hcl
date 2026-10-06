@@ -54,6 +54,12 @@ inputs = {
     # imperatively during the keyless-frontend work; live-verified 2026-07-28, NOT in the Fable doc.
     "roles/firebasehosting.admin",
 
+    # Firestore composite indexes: deploy-frontend.yml runs `firebase deploy --only firestore:indexes`,
+    # which firebasehosting.admin does not cover. Granted by hand 2026-08-01 (see ReferencesContext
+    # wiki/04-infra/infra-reference.md drift note); codified here. Additive member, so adopting the
+    # live grant is a no-op create.
+    "roles/datastore.indexAdmin",
+
     # ── Self-hosted-runner (Cloud Build) fallback ─────────────────────────────────────────────
     # The self-hosted Cloud Run runner has no Docker daemon, so under the runner path the backend
     # image is built via `gcloud builds submit` (backend/cloudbuild.yaml) instead of `docker buildx`.
