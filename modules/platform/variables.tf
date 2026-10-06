@@ -37,3 +37,14 @@ variable "panel_image" {
   EOT
   default     = "us-docker.pkg.dev/cloudrun/container/hello:latest"
 }
+
+variable "engine_api_base_url" {
+  type        = string
+  default     = ""
+  description = "Engine API base URL for platform-api's engineClient (ENGINE_API_BASE_URL). Empty = not injected (the app falls back to localhost:4000, which fails on Cloud Run)."
+
+  validation {
+    condition     = var.engine_api_base_url == "" || can(regex("^https://", var.engine_api_base_url))
+    error_message = "engine_api_base_url must be an https URL."
+  }
+}

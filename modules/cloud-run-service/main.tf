@@ -86,8 +86,15 @@ resource "google_cloud_run_v2_service" "this" {
 
   # CI deploys new revisions by image — Terraform should not fight CI over the image.
   # Mirrors modules/cloud-run (the engine service). `var.image` still seeds the first apply.
+  # `client`/`client_version` are stamped by `gcloud run deploy` (the app CI) as service metadata;
+  # Terraform never sets them, so without this every plan would null them (cosmetic drift). Same
+  # rule as modules/cloud-run.
   lifecycle {
-    ignore_changes = [template[0].containers[0].image]
+    ignore_changes = [
+      template[0].containers[0].image,
+      client,
+      client_version,
+    ]
   }
 }
 

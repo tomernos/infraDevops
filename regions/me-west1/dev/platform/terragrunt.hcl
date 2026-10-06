@@ -32,4 +32,8 @@ inputs = {
   # VITE_API_BASE_URL baked to the live platform-api URL (63f8203). CORS_ORIGINS auto-tracks the
   # panel service URL via module.panel.uri, so no manual CORS edit is needed.
   panel_image = "me-west1-docker.pkg.dev/sweptlock-dev-844f2/swpt-mw1-dev-registry/platform-panel:63f8203"
+
+  # Set by hand with gcloud before Terraform owned it; adopted with the exact live value so the plan
+  # is a no-op. This is the engine API's deterministic run.app URL (the hash-style URL also works).
+  engine_api_base_url = "https://swpt-mw1-dev-api-328253595673.me-west1.run.app"
 }

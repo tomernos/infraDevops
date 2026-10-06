@@ -88,12 +88,17 @@ module "api" {
   subnetwork  = var.subnetwork
   vpc_egress  = "ALL_TRAFFIC" # DB private IP + Firebase public APIs via Cloud NAT
 
-  env_vars = {
-    BIND_HOST           = "0.0.0.0" # index.js defaults to 127.0.0.1 — unreachable on Cloud Run
-    NODE_ENV            = "production"
-    FIREBASE_PROJECT_ID = var.firebase_project_id
-    CORS_ORIGINS        = module.panel.uri # single api←panel edge; SPA origin allow-list
-  }
+  env_vars = merge(
+    {
+      BIND_HOST           = "0.0.0.0" # index.js defaults to 127.0.0.1 — unreachable on Cloud Run
+      NODE_ENV            = "production"
+      FIREBASE_PROJECT_ID = var.firebase_project_id
+      CORS_ORIGINS        = module.panel.uri # single api←panel edge; SPA origin allow-list
+    },
+    # engineClient.js calls the engine API for entitlement/kill-switch actions and falls back to
+    # http://localhost:4000 when this is unset, so on Cloud Run those panel actions fail.
+    var.engine_api_base_url != "" ? { ENGINE_API_BASE_URL = var.engine_api_base_url } : {},
+  )
 
   # node-postgres reads PG* when no connectionString is set (config/db.js passes
   # connectionString: process.env.DATABASE_URL, unset here). Reuses the engine's DB secrets —
