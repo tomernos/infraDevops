@@ -22,7 +22,16 @@ resource "google_privateca_ca_pool" "pool" {
   }
 }
 
+moved {
+  from = google_privateca_certificate_authority.root
+  to   = google_privateca_certificate_authority.root[0]
+}
+
+# root_ca_enabled = false keeps the pool (free, and its name stays stable for CAS_CA_POOL) but no CA,
+# which is the billed part. With no enabled CA in the pool, issuance fails closed.
 resource "google_privateca_certificate_authority" "root" {
+  count = var.root_ca_enabled ? 1 : 0
+
   pool                     = google_privateca_ca_pool.pool.name
   certificate_authority_id = "${var.name_prefix}-root-ca"
   location                 = var.region

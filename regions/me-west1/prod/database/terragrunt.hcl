@@ -26,4 +26,9 @@ inputs = {
   ha_enabled          = true # REGIONAL failover replica
   pitr_enabled        = true # point-in-time recovery
   deletion_protection = true # block accidental prod DB destroy
+
+  # PARKED: prod is not launched; the instance is stopped to avoid compute billing (storage +
+  # backups kept). This records the live state so an unrelated prod apply cannot start it. Flip to
+  # "ALWAYS" in the change that launches prod.
+  activation_policy = "NEVER"
 }

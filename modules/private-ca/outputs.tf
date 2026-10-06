@@ -4,6 +4,6 @@ output "ca_pool_name" {
 }
 
 output "root_ca_id" {
-  description = "Full root CA resource name."
-  value       = google_privateca_certificate_authority.root.id
+  description = "Full root CA resource name, or null when root_ca_enabled = false."
+  value       = one(google_privateca_certificate_authority.root[*].id)
 }

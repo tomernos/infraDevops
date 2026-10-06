@@ -58,3 +58,9 @@ variable "deletion_protection" {
   default     = true
   description = "Protect the root CA from accidental destroy (prod default true)."
 }
+
+variable "root_ca_enabled" {
+  type        = bool
+  default     = true
+  description = "Create the self-signed root CA. False parks the CA (no CA billing) and leaves the pool in place; PDF signing on gcp_cas then fails closed."
+}
