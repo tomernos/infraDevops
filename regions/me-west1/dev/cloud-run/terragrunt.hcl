@@ -84,5 +84,7 @@ inputs = {
   # PDF Sign external signers. Secret container adopted into the security unit (import block there);
   # its value was hand-injected 2026-09-16 and is mounted at `latest`.
   sign_guest_jwt_secret_name = "sign-guest-jwt-secret"
-  # sign_link_base_url: PENDING the live value from `gcloud run services describe` (see PR body).
+  # SIGN_LINK_BASE_URL was never set on dev, so invite emails carried a bare token instead of a
+  # link. The engine appends /<token>; the web route is frontend/app/sign-guest/[token].tsx.
+  sign_link_base_url = "https://sweptlock-dev-844f2.web.app/sign-guest"
 }
