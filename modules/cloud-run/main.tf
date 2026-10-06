@@ -35,6 +35,28 @@ locals {
     DROP_ZONE_JWT_SECRET = "drop-zone-jwt-secret"
   } : {}
 
+  # Account-lifecycle + auth env (non-secret). Each is injected only when set, so an env that has
+  # not adopted a feature keeps the engine's fail-closed default:
+  #   DELETION_SWEEPER_SA        unset -> /internal/run-deletion-sweep rejects every caller.
+  #   AUTH_CONTACT_CUTOVER_DATE  unset -> signup verification hard block OFF and the pending-user
+  #                              GC does nothing. Must never be dropped once set: removing it
+  #                              silently re-opens unverified signups.
+  #   APP_WEB_BASE_URL           unset -> MFA recovery links cannot be emailed (logged).
+  #   SIGN_LINK_BASE_URL         origin for external-signer invite links.
+  lifecycle_env = { for k, v in {
+    DELETION_SWEEPER_SA       = var.deletion_sweeper_sa
+    AUTH_CONTACT_CUTOVER_DATE = var.auth_contact_cutover_date
+    APP_WEB_BASE_URL          = var.app_web_base_url
+    SIGN_LINK_BASE_URL        = var.sign_link_base_url
+  } : k => v if v != "" }
+
+  # PDF Sign external (accountless) signer session secret. HS256, deliberately a different secret
+  # from DROP_ZONE_JWT_SECRET so one leaked key cannot mint the other feature's guest tokens.
+  # Unset -> guestSession.getSignSecret() throws and external-signer links fail closed.
+  sign_secret_env = var.sign_guest_jwt_secret_name != "" ? {
+    SIGN_GUEST_JWT_SECRET = var.sign_guest_jwt_secret_name
+  } : {}
+
   # Base secret env (secret name = "${name_prefix}-<key>"). KEYLESS: when firebase_use_adc is set,
   # FIREBASE_ADMIN_SDK_JSON is NOT mounted — its absence makes the backend's firebase.js fall through
   # to Application Default Credentials (the runtime SA). The org disables downloadable SA keys, so
@@ -210,6 +232,29 @@ resource "google_cloud_run_v2_service" "api" {
       # Guest-sharing secret env (DROP_ZONE_JWT_SECRET) — secret_key_ref:latest, never via a TF data source.
       dynamic "env" {
         for_each = local.guest_secret_env
+        content {
+          name = env.key
+          value_source {
+            secret_key_ref {
+              secret  = "${var.name_prefix}-${env.value}"
+              version = "latest"
+            }
+          }
+        }
+      }
+
+      # Account-lifecycle + auth env (non-secret): sweeper OIDC identity, contact cutover, web origins.
+      dynamic "env" {
+        for_each = local.lifecycle_env
+        content {
+          name  = env.key
+          value = env.value
+        }
+      }
+
+      # External-signer session secret (SIGN_GUEST_JWT_SECRET) — secret_key_ref:latest, never via a TF data source.
+      dynamic "env" {
+        for_each = local.sign_secret_env
         content {
           name = env.key
           value_source {

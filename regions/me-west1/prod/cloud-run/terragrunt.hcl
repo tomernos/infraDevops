@@ -66,6 +66,16 @@ inputs = {
   enable_guest_sharing = true
   cleanup_scheduler_sa = "swpt-mw1-prod-sa-cleanup@sweptlock-prod.iam.gserviceaccount.com"
 
+  # Right-to-be-Forgotten sweeper SA (created by the account-lifecycle unit; conventional constant,
+  # same acyclic pattern as cleanup_scheduler_sa). Without it requested deletions are never executed.
+  deletion_sweeper_sa = "swpt-mw1-prod-sa-del-sweep@sweptlock-prod.iam.gserviceaccount.com"
+
+  # Deliberately NOT set yet (prod bring-up decisions, see PROD-BRINGUP.md step 6):
+  #   auth_contact_cutover_date  - set in the same deploy that runs the contact-compliance backfill.
+  #   app_web_base_url / sign_link_base_url - the prod web origin.
+  #   sign_guest_jwt_secret_name - only AFTER the secret has a version; mounting an empty container
+  #                                at `latest` fails the revision.
+
   # KEYLESS Firebase Admin: the org disables downloadable SA keys, so prod does NOT mount a
   # FIREBASE_ADMIN_SDK_JSON secret — the backend authenticates as the runtime SA via ADC. This also
   # grants the runtime SA firebaseauth.admin + datastore.user; the Firebase Storage bucket grant is

@@ -104,6 +104,53 @@ variable "cleanup_scheduler_sa" {
   description = "Email of the Cloud Scheduler SA allowed to call POST /internal/run-cleanup (OIDC). Empty leaves the guard env unset."
 }
 
+# ── Account lifecycle + auth (RTBF sweeper, Auth/MFA epic, PDF Sign external signers) ────────
+# All default to "" = not injected, which keeps each engine feature in its fail-closed state.
+variable "deletion_sweeper_sa" {
+  type        = string
+  default     = ""
+  description = "Email of the Cloud Scheduler SA allowed to call POST /internal/run-deletion-sweep (OIDC), from the account-lifecycle unit. Empty leaves the guard env unset (every call rejected)."
+}
+
+variable "auth_contact_cutover_date" {
+  type        = string
+  default     = ""
+  description = "AUTH_CONTACT_CUTOVER_DATE (RFC 3339 UTC). Signups at/after it must verify a contact channel; the pending-user GC only considers rows created at/after it. Set once per env, then never change or remove: it must equal the --cutover the backfill was applied with."
+
+  validation {
+    condition     = var.auth_contact_cutover_date == "" || can(timeadd(var.auth_contact_cutover_date, "0s"))
+    error_message = "auth_contact_cutover_date must be an RFC 3339 timestamp, e.g. 2026-09-25T14:38:28Z."
+  }
+}
+
+variable "app_web_base_url" {
+  type        = string
+  default     = ""
+  description = "Web app origin used in emailed MFA recovery links (APP_WEB_BASE_URL), e.g. https://<project>.web.app."
+
+  validation {
+    condition     = var.app_web_base_url == "" || can(regex("^https://[^/]+$", var.app_web_base_url))
+    error_message = "app_web_base_url must be an https origin with no path or trailing slash."
+  }
+}
+
+variable "sign_link_base_url" {
+  type        = string
+  default     = ""
+  description = "Origin for PDF Sign external-signer invite links (SIGN_LINK_BASE_URL)."
+
+  validation {
+    condition     = var.sign_link_base_url == "" || can(regex("^https://", var.sign_link_base_url))
+    error_message = "sign_link_base_url must be an https URL."
+  }
+}
+
+variable "sign_guest_jwt_secret_name" {
+  type        = string
+  default     = ""
+  description = "Secret suffix (secret = \"<name_prefix>-<this>\") mounted as SIGN_GUEST_JWT_SECRET. The container is created by the security module; its value is populated out-of-band. Empty = not mounted (external-signer links fail closed)."
+}
+
 variable "firebase_use_adc" {
   type        = bool
   default     = false

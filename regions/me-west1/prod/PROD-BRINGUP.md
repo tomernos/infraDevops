@@ -101,6 +101,9 @@ cd sweptlock-infra
 ENV=prod ./scripts/populate-secrets.sh sweptlock-prod swpt-mw1-prod
 ```
 Provide prod values (not dev) for: DB app secrets, `DROP_ZONE_JWT_SECRET`,
+`SIGN_GUEST_JWT_SECRET` (`openssl rand -hex 48 | gcloud secrets versions add
+swpt-mw1-prod-sign-guest-jwt-secret --data-file=-`; must differ from the drop-zone secret,
+then set `sign_guest_jwt_secret_name` in the prod cloud-run unit),
 `ADMIN_EMAIL`, Firebase bucket, and any KMS-key-version references. **KEK/sign-HMAC
 are KMS-only** (no master key) — the cloud-run stack wires the KMS key ids from the
 security stack automatically.
@@ -141,4 +144,8 @@ Point the prod domain at the prod Hosting + Cloud Run, and add it to `CORS_ORIGI
 - [ ] KMS key ring/keys exist; cloud-run wired to `kms_trust_dek_id` + `kms_sign_hmac_version_id`.
 - [ ] `ca_provider` is a real CA (NOT `local`); no local-CA PEM secrets in prod.
 - [ ] migrate job ran (053–057 applied) before the first prod revision served.
+- [ ] `swpt-mw1-prod-deletion-sweep` Scheduler job exists and a manual run returns 200
+      (`gcloud scheduler jobs run swpt-mw1-prod-deletion-sweep --location=me-west1`); the API
+      log shows `RUN-DELETION-SWEEP` without a 403.
+- [ ] `AUTH_CONTACT_CUTOVER_DATE` set on the API and equal to the backfill's `--cutover`.
 - [ ] `_PROD` GitHub secrets set; prod deploy is manual/gated, not auto-on-merge.

@@ -144,6 +144,12 @@ locals {
     # JWTs. Shared by both features; value populated out-of-band (>=32 chars random), never a
     # TF secret-version. See plans/gusturl-infra-plan.md.
     "drop-zone-jwt-secret",
+    # PDF Sign external (accountless) signer sessions: HS256 secret, deliberately distinct from
+    # drop-zone-jwt-secret. Value populated out-of-band (openssl rand -hex 48), never a TF
+    # secret-version. In dev the container predates this line (made by hand 2026-09-16) and is
+    # ADOPTED via the import block in regions/me-west1/dev/security, never recreated: a new
+    # container would invalidate every in-flight external-signer token.
+    "sign-guest-jwt-secret",
     # Platform-api secrets
     "platform-db-user", # read-only postgres user for platform-api
     "platform-db-password",

@@ -68,4 +68,21 @@ inputs = {
   # path. The watermark service is IAM-locked to sa-api (primary gate); the secret is the app-owned second gate.
   watermark_svc_url            = dependency.watermark.outputs.uri
   watermark_shared_secret_name = "watermark-shared-secret"
+
+  # Right-to-be-Forgotten sweeper: the conventional SA the account-lifecycle unit creates (constant,
+  # not a dependency output, to keep the DAG acyclic). Without it /internal/run-deletion-sweep
+  # rejects every call and requested deletions are never carried out.
+  deletion_sweeper_sa = "swpt-mw1-dev-sa-del-sweep@sweptlock-dev-844f2.iam.gserviceaccount.com"
+
+  # Auth/MFA epic. These were first set by hand on 2026-09-25 (revision 00080-shz) and are adopted
+  # here so an apply of this unit no longer silently drops them.
+  # AUTH_CONTACT_CUTOVER_DATE is FROZEN: it must equal the --cutover the contact-compliance
+  # backfill was applied with. Never edit or remove it (removal re-opens unverified signups).
+  auth_contact_cutover_date = "2026-09-25T14:38:28Z"
+  app_web_base_url          = "https://sweptlock-dev-844f2.web.app"
+
+  # PDF Sign external signers. Secret container adopted into the security unit (import block there);
+  # its value was hand-injected 2026-09-16 and is mounted at `latest`.
+  sign_guest_jwt_secret_name = "sign-guest-jwt-secret"
+  # sign_link_base_url: PENDING the live value from `gcloud run services describe` (see PR body).
 }
